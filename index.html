@@ -46950,4 +46950,2259 @@
   setTimeout(loadMqttLibV42, 600);
 })();
 </script>
+<!-- ===================================================================== -->
+<!-- ⚔️ V43 PRO CLIMB CAMPAIGN (25-LEVEL ROADMAP, LEVELS 1–10 PLAYABLE),   -->
+<!--    ENDLESS ⚡ BLUNDER DODGER, 🧊 FREEZE-FRAME BOSSES, ON-SCREEN       -->
+<!--    3-2-1 COUNTDOWN & TIMERS, + UNIVERSAL RIGHT-CLICK ARROWS           -->
+<!--    100% isolated — zero edits to Play, Online, Puzzles, or chessmog   -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyClimbCampaignAndBlunderDodgerV43() {
+  const STD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const CLIMB_SAVE_KEY = 'chess_pro_climb_v43';
+  const FILES = 'abcdefgh';
+
+  // -------------------------------------------------------------------------
+  // 1. PERSISTENT CLIMB SAVE STATE
+  // -------------------------------------------------------------------------
+  let climbSave = {
+    completed: [],        // level numbers cleared, e.g. [1, 2, 3]
+    endlessBest: 0,       // best Endless Blunder Dodger score
+    freePlayUnlock: false // optional toggle to test any playable level
+  };
+
+  function loadClimbSaveV43() {
+    try {
+      const raw = window.localStorage.getItem(CLIMB_SAVE_KEY);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p && typeof p === 'object') {
+          climbSave.completed = Array.isArray(p.completed) ? p.completed : [];
+          climbSave.endlessBest = Number(p.endlessBest) || 0;
+          climbSave.freePlayUnlock = Boolean(p.freePlayUnlock);
+        }
+      }
+    } catch (e) {}
+  }
+
+  function writeClimbSaveV43() {
+    try { window.localStorage.setItem(CLIMB_SAVE_KEY, JSON.stringify(climbSave)); } catch (e) {}
+    try {
+      if (typeof userProfile !== 'undefined') {
+        userProfile.climbV43 = { ...climbSave };
+        if (typeof window.saveAndRenderProfile === 'function') window.saveAndRenderProfile(0);
+      }
+    } catch (e) {}
+  }
+
+  function isLevelCompleted(lvl) {
+    return climbSave.completed.includes(lvl);
+  }
+
+  function isLevelUnlocked(lvl) {
+    if (lvl > 10) return false; // Tiers 3-5 coming in V44
+    if (climbSave.freePlayUnlock || lvl === 1) return true;
+    return isLevelCompleted(lvl - 1);
+  }
+
+  function markLevelCompleted(lvl, eloReward = 15) {
+    if (!climbSave.completed.includes(lvl)) {
+      climbSave.completed.push(lvl);
+      climbSave.completed.sort((a, b) => a - b);
+      if (typeof userProfile !== 'undefined') {
+        userProfile.xp = (userProfile.xp || 0) + 45;
+        userProfile.elo = (userProfile.elo || 0) + eloReward;
+      }
+    }
+    writeClimbSaveV43();
+  }
+
+  loadClimbSaveV43();
+
+  // -------------------------------------------------------------------------
+  // 2. STYLES: ON-SCREEN 3-2-1 COUNTDOWN, FLOATING TIMER, FREEZE BAR & MAP
+  // -------------------------------------------------------------------------
+  const cssV43 = document.createElement('style');
+  cssV43.textContent = `
+    body.v43-climb-live .move-badge-on-sq { display: none !important; }
+
+    /* Universal Right-Click Arrow Layer + Climb Graphics Layer */
+    #v43RightClickSvg, #v43ClimbBoardSvg {
+      position: absolute;
+      pointer-events: none;
+      overflow: visible;
+    }
+    #v43ClimbBoardSvg {
+      z-index: 54;
+      filter: drop-shadow(0 3px 4px rgba(0,0,0,0.55));
+    }
+    #v43RightClickSvg {
+      z-index: 56;
+      filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+    }
+    #v43ClimbBoardSvg.hidden, #v43RightClickSvg.hidden { display: none !important; }
+
+    /* ON-SCREEN FLOATING HUD BAR AT TOP OF CHESSBOARD */
+    #v43OnScreenHud {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 72;
+      width: min(92%, 440px);
+      background: rgba(18, 17, 15, 0.92);
+      border: 1.5px solid rgba(255,255,255,0.16);
+      border-radius: 14px;
+      padding: 8px 12px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.72);
+      backdrop-filter: blur(6px);
+      pointer-events: none;
+      transition: border-color 0.2s ease;
+    }
+    #v43OnScreenHud.hidden { display: none !important; }
+    #v43OnScreenHud.hud-freeze {
+      border-color: #38bdf8;
+      box-shadow: 0 0 24px rgba(56, 189, 248, 0.35), 0 12px 32px rgba(0,0,0,0.75);
+    }
+    #v43OnScreenHud.hud-danger {
+      border-color: #ef4444;
+      box-shadow: 0 0 22px rgba(239, 68, 68, 0.45), 0 12px 32px rgba(0,0,0,0.75);
+    }
+    #v43HudBarTrack {
+      width: 100%;
+      height: 7px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.1);
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    #v43HudBarFill {
+      height: 100%;
+      width: 100%;
+      border-radius: 99px;
+      background: #81b64c;
+      transition: width 60ms linear, background-color 0.18s ease;
+    }
+
+    /* ON-SCREEN BIG 3-2-1-GO COUNTDOWN OVERLAY */
+    #v43CountdownOverlay {
+      position: absolute;
+      inset: 0;
+      z-index: 78;
+      background: rgba(12, 11, 10, 0.62);
+      backdrop-filter: blur(3px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+      border-radius: 6px;
+    }
+    #v43CountdownOverlay.hidden { display: none !important; }
+    #v43CountdownNum {
+      font-size: 76px;
+      font-weight: 900;
+      line-height: 1;
+      color: #ffffff;
+      text-shadow: 0 6px 26px rgba(0,0,0,0.85), 0 0 28px rgba(129, 182, 76, 0.7);
+      animation: v43CountPop 0.68s cubic-bezier(0.18, 0.89, 0.32, 1.35);
+    }
+    @keyframes v43CountPop {
+      0%   { transform: scale(0.35); opacity: 0; }
+      55%  { transform: scale(1.16); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* ON-SCREEN QUICK RESULT FLASH TOAST */
+    #v43BoardToast {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 75;
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #ffffff;
+      background: #23221f;
+      border: 2px solid #81b64c;
+      box-shadow: 0 10px 26px rgba(0,0,0,0.75);
+      pointer-events: none;
+      white-space: nowrap;
+      animation: v43ToastPop 0.22s ease;
+    }
+    #v43BoardToast.hidden { display: none !important; }
+    @keyframes v43ToastPop {
+      0%   { transform: translate(-50%, 10px) scale(0.9); opacity: 0; }
+      100% { transform: translate(-50%, 0) scale(1); opacity: 1; }
+    }
+
+    /* CLIMB SIDEBAR TAB PANEL */
+    #tabContentClimb.hidden { display: none !important; }
+    #tabContentClimb:not(.hidden) {
+      display: flex !important;
+      flex-direction: column !important;
+      flex: 1 1 auto !important;
+      overflow-y: auto !important;
+      padding: 10px 11px !important;
+    }
+
+    .v43-endless-hero {
+      background: linear-gradient(135deg, #271b3d 0%, #182334 100%);
+      border: 1.5px solid rgba(168, 85, 247, 0.55);
+      border-radius: 14px;
+      padding: 11px 12px;
+      margin-bottom: 10px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+    }
+
+    .v43-tier-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px;
+      border-radius: 9px;
+      background: #171614;
+      border: 1px solid rgba(255,255,255,0.08);
+      margin-top: 8px;
+      margin-bottom: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      color: #e8e6e2;
+    }
+
+    .v43-level-card {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 10px;
+      border-radius: 12px;
+      background: #252420;
+      border: 1.5px solid rgba(255,255,255,0.08);
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+    }
+    .v43-level-card:hover:not(.locked) {
+      border-color: #81b64c;
+      background: #2d2b26;
+      transform: translateY(-1px);
+    }
+    .v43-level-card.cleared {
+      border-color: rgba(129, 182, 76, 0.55);
+      background: linear-gradient(90deg, rgba(129,182,76,0.14) 0%, #252420 70%);
+    }
+    .v43-level-card.boss-card:not(.locked) {
+      border-color: rgba(247, 192, 69, 0.55);
+      background: linear-gradient(90deg, rgba(247,192,69,0.13) 0%, #252420 75%);
+    }
+    .v43-level-card.locked {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .v43-lvl-badge {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: #181714;
+      border: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    /* Blunder Dodger Big Choice Buttons */
+    .v43-choice-btn {
+      width: 100%;
+      padding: 12px 10px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #ffffff;
+      cursor: pointer;
+      transition: transform 0.1s ease, filter 0.12s ease;
+      border: 2px solid transparent;
+    }
+    .v43-choice-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .v43-choice-btn:disabled { opacity: 0.45; pointer-events: none; }
+    .v43-choice-a {
+      background: linear-gradient(180deg, #2ca9d6 0%, #197da3 100%);
+      border-color: #8ee2ff;
+      box-shadow: 0 3px 0 #0e4c66;
+    }
+    .v43-choice-b {
+      background: linear-gradient(180deg, #a855f7 0%, #7e22ce 100%);
+      border-color: #e9d5ff;
+      box-shadow: 0 3px 0 #4c1d95;
+    }
+  `;
+  document.head.appendChild(cssV43);
+
+  // -------------------------------------------------------------------------
+  // 3. CRISP POLYGON ARROW ENGINE + UNIVERSAL RIGHT-CLICK ARROWS (APP-WIDE!)
+  // -------------------------------------------------------------------------
+  function sqToPt800(sq) {
+    if (!sq || sq.length < 2) return null;
+    const f = FILES.indexOf(sq[0]);
+    const r = parseInt(sq[1], 10);
+    if (f < 0 || isNaN(r)) return null;
+    const col = boardFlipped ? (7 - f) : f;
+    const row = boardFlipped ? (r - 1) : (8 - r);
+    return { x: col * 100 + 50, y: row * 100 + 50, col, row };
+  }
+
+  function clientXYToSq(clientX, clientY) {
+    if (!boardEl) return null;
+    const rect = boardEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
+    const col = Math.min(7, Math.max(0, Math.floor((x / rect.width) * 8)));
+    const row = Math.min(7, Math.max(0, Math.floor((y / rect.height) * 8)));
+    const fIdx = boardFlipped ? (7 - col) : col;
+    const rNum = boardFlipped ? (row + 1) : (8 - row);
+    return FILES[fIdx] + rNum;
+  }
+
+  function buildPolyArrowV43(x1, y1, x2, y2, sw = 10, hw = 22) {
+    const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy);
+    if (L < 22) return '';
+    const ux = dx / L, uy = dy / L, px = -uy, py = ux;
+    const so = Math.min(18, L * 0.16), to = Math.min(14, L * 0.12);
+    const hl = Math.min(35, Math.max(21, Math.max(24, L - so - to) * 0.44));
+    const sx = x1 + ux * so, sy = y1 + uy * so;
+    const tx = x2 - ux * to, ty = y2 - uy * to;
+    const bx = tx - ux * hl, by = ty - uy * hl;
+    return [
+      [sx + px * sw, sy + py * sw], [bx + px * sw, by + py * sw],
+      [bx + px * hw, by + py * hw], [tx, ty],
+      [bx - px * hw, by - py * hw], [bx - px * sw, by - py * sw],
+      [sx - px * sw, sy - py * sw]
+    ].map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  }
+
+  function syncBoardOverlayBox(el) {
+    if (!el || !boardEl) return;
+    el.style.left   = `${boardEl.offsetLeft}px`;
+    el.style.top    = `${boardEl.offsetTop}px`;
+    el.style.width  = `${boardEl.offsetWidth}px`;
+    el.style.height = `${boardEl.offsetHeight}px`;
+  }
+
+  function ensureSvgLayer(id) {
+    if (!boardEl || !boardEl.parentElement) return null;
+    const parent = boardEl.parentElement;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    let svg = document.getElementById(id);
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = id;
+      svg.setAttribute('viewBox', '0 0 800 800');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.classList.add('hidden');
+      parent.appendChild(svg);
+    }
+    syncBoardOverlayBox(svg);
+    return svg;
+  }
+
+  // ---- UNIVERSAL RIGHT-CLICK ARROWS & SQUARE HIGHLIGHTS ----
+  const rcArrows = new Map(); // "e2-e4" -> { from, to }
+  const rcCircles = new Set(); // "e4"
+  let rcStartSq = null;
+
+  function renderRightClickLayer() {
+    const svg = ensureSvgLayer('v43RightClickSvg');
+    if (!svg) return;
+    if (rcArrows.size === 0 && rcCircles.size === 0) {
+      svg.innerHTML = '';
+      svg.classList.add('hidden');
+      return;
+    }
+    let out = '';
+    rcCircles.forEach(sq => {
+      const pt = sqToPt800(sq);
+      if (!pt) return;
+      out += `<circle cx="${pt.x}" cy="${pt.y}" r="42" fill="rgba(249,115,22,0.16)" stroke="#f97316" stroke-width="7" />`;
+    });
+    rcArrows.forEach(ar => {
+      const p1 = sqToPt800(ar.from), p2 = sqToPt800(ar.to);
+      if (!p1 || !p2) return;
+      const pts = buildPolyArrowV43(p1.x, p1.y, p2.x, p2.y, 9.5, 21);
+      if (pts) out += `<polygon points="${pts}" fill="#f97316" fill-opacity="0.86" stroke="rgba(18,17,15,0.45)" stroke-width="1.8" stroke-linejoin="round" />`;
+    });
+    svg.innerHTML = out;
+    svg.classList.remove('hidden');
+  }
+
+  function clearRightClickLayer() {
+    if (rcArrows.size === 0 && rcCircles.size === 0) return;
+    rcArrows.clear();
+    rcCircles.clear();
+    renderRightClickLayer();
+  }
+
+  if (boardEl) {
+    boardEl.addEventListener('contextmenu', (e) => e.preventDefault());
+    boardEl.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) {
+        e.preventDefault();
+        rcStartSq = clientXYToSq(e.clientX, e.clientY);
+      } else if (e.button === 0) {
+        clearRightClickLayer();
+      }
+    }, true);
+
+    window.addEventListener('pointerup', (e) => {
+      if (e.button !== 2 || !rcStartSq) return;
+      const endSq = clientXYToSq(e.clientX, e.clientY);
+      const st = rcStartSq;
+      rcStartSq = null;
+      if (!endSq) return;
+      if (st === endSq) {
+        if (rcCircles.has(st)) rcCircles.delete(st);
+        else rcCircles.add(st);
+      } else {
+        const key = `${st}-${endSq}`;
+        if (rcArrows.has(key)) rcArrows.delete(key);
+        else rcArrows.set(key, { from: st, to: endSq });
+      }
+      renderRightClickLayer();
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. ON-SCREEN FLOATING HUD, 3-2-1 COUNTDOWN & BOARD TOAST HELPERS
+  // -------------------------------------------------------------------------
+  function ensureOnScreenStageDom() {
+    if (!boardEl || !boardEl.parentElement) return null;
+    const parent = boardEl.parentElement;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+
+    let hud = document.getElementById('v43OnScreenHud');
+    if (!hud) {
+      hud = document.createElement('div');
+      hud.id = 'v43OnScreenHud';
+      hud.className = 'hidden';
+      hud.innerHTML = `
+        <div class="flex items-center justify-between gap-2 text-xs font-extrabold text-white">
+          <div id="v43HudLeft" class="truncate">⚡ Blunder Dodger</div>
+          <div id="v43HudRight" class="flex items-center gap-2 flex-shrink-0"></div>
+        </div>
+        <div id="v43HudSub" class="text-[11px] font-semibold text-[#c7c5c0] mt-0.5 truncate"></div>
+        <div id="v43HudBarTrack"><div id="v43HudBarFill"></div></div>
+      `;
+      parent.appendChild(hud);
+    }
+
+    let cd = document.getElementById('v43CountdownOverlay');
+    if (!cd) {
+      cd = document.createElement('div');
+      cd.id = 'v43CountdownOverlay';
+      cd.className = 'hidden';
+      cd.innerHTML = `
+        <div id="v43CountdownTitle" class="text-sm font-extrabold uppercase tracking-widest text-[#9ad165] mb-2"></div>
+        <div id="v43CountdownNum">3</div>
+        <div id="v43CountdownSub" class="text-xs font-bold text-[#e2e0dc] mt-3 px-4 text-center max-w-[320px]"></div>
+      `;
+      parent.appendChild(cd);
+    }
+
+    let toast = document.getElementById('v43BoardToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'v43BoardToast';
+      toast.className = 'hidden';
+      parent.appendChild(toast);
+    }
+    return { hud, cd, toast };
+  }
+
+  let v43ToastT = null;
+  function flashBoardToastV43(msg, borderColor = '#81b64c', ms = 1400) {
+    const dom = ensureOnScreenStageDom();
+    if (!dom) return;
+    dom.toast.textContent = msg;
+    dom.toast.style.borderColor = borderColor;
+    dom.toast.classList.remove('hidden');
+    if (v43ToastT) clearTimeout(v43ToastT);
+    v43ToastT = setTimeout(() => dom.toast.classList.add('hidden'), ms);
+  }
+
+  function setOnScreenHudV43(cfg) {
+    const dom = ensureOnScreenStageDom();
+    if (!dom) return;
+    if (!cfg) {
+      dom.hud.classList.add('hidden');
+      return;
+    }
+    dom.hud.classList.remove('hidden', 'hud-freeze', 'hud-danger');
+    if (cfg.mode === 'freeze') dom.hud.classList.add('hud-freeze');
+    if (cfg.mode === 'danger') dom.hud.classList.add('hud-danger');
+
+    dom.hud.querySelector('#v43HudLeft').innerHTML = cfg.left || '';
+    dom.hud.querySelector('#v43HudRight').innerHTML = cfg.right || '';
+    const subEl = dom.hud.querySelector('#v43HudSub');
+    subEl.innerHTML = cfg.sub || '';
+    subEl.classList.toggle('hidden', !cfg.sub);
+
+    const track = dom.hud.querySelector('#v43HudBarTrack');
+    const fill = dom.hud.querySelector('#v43HudBarFill');
+    if (typeof cfg.pct === 'number') {
+      track.classList.remove('hidden');
+      fill.style.width = `${Math.max(0, Math.min(100, cfg.pct))}%`;
+      fill.style.backgroundColor = cfg.barColor || '#81b64c';
+    } else {
+      track.classList.add('hidden');
+    }
+  }
+
+  let v43CountdownTimer = null;
+  function runBoardCountdownV43(title, subtitle, onGo) {
+    const dom = ensureOnScreenStageDom();
+    if (!dom) { if (onGo) onGo(); return; }
+    if (v43CountdownTimer) { clearTimeout(v43CountdownTimer); v43CountdownTimer = null; }
+
+    const steps = ['3', '2', '1', 'GO!'];
+    let idx = 0;
+    dom.cd.querySelector('#v43CountdownTitle').textContent = title || 'GET READY';
+    dom.cd.querySelector('#v43CountdownSub').textContent = subtitle || '';
+    dom.cd.classList.remove('hidden');
+
+    const numEl = dom.cd.querySelector('#v43CountdownNum');
+
+    const nextTick = () => {
+      if (!v43Session) { dom.cd.classList.add('hidden'); return; }
+      const val = steps[idx];
+      numEl.textContent = val;
+      numEl.style.color = val === 'GO!' ? '#81b64c' : '#ffffff';
+      numEl.style.animation = 'none';
+      void numEl.offsetWidth;
+      numEl.style.animation = 'v43CountPop 0.65s cubic-bezier(0.18, 0.89, 0.32, 1.35)';
+      try { playChessSound(val === 'GO!' ? 'levelup' : 'move'); } catch (e) {}
+
+      idx++;
+      if (idx < steps.length) {
+        v43CountdownTimer = setTimeout(nextTick, 680);
+      } else {
+        v43CountdownTimer = setTimeout(() => {
+          dom.cd.classList.add('hidden');
+          if (v43Session && onGo) onGo();
+        }, 480);
+      }
+    };
+    nextTick();
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. DEDICATED CLIMB BOT WEB WORKER (FOR FINISH HIM! & 600 / 1000 BOSSES)
+  // -------------------------------------------------------------------------
+  const climbBotSrc = `
+    const VAL = [0, 100, 320, 330, 500, 900, 20000];
+    const N_OFF = [-33,-31,-18,-14,14,18,31,33];
+    const B_OFF = [-17,-15,15,17];
+    const R_OFF = [-16,-1,1,16];
+    const K_OFF = [-17,-16,-15,-1,1,15,16,17];
+    const FILES = 'abcdefgh';
+    let b = new Int8Array(128), turn = 0, cas = 0, ep = -1, kSq = [0x74, 0x04];
+    let nodes = 0, dead = 0, abrt = false, ply = 0;
+    const uC = new Int8Array(128), uCa = new Int8Array(128), uE = new Int16Array(128), uW = new Int16Array(128), uB = new Int16Array(128);
+
+    function loadFen(fen){
+      b.fill(0); kSq[0]=-1; kSq[1]=-1;
+      const p=fen.trim().split(/\\s+/), rows=p[0].split('/');
+      for(let r=0;r<8;r++){let c=0; for(let i=0;i<rows[r].length;i++){const ch=rows[r][i]; if(ch>='1'&&ch<='8')c+=ch.charCodeAt(0)-48; else{const sq=(r<<4)|c, isB=ch>='a', lo=ch.toLowerCase(); const t=lo==='p'?1:lo==='n'?2:lo==='b'?3:lo==='r'?4:lo==='q'?5:6; b[sq]=isB?(t|8):t; if(t===6)kSq[isB?1:0]=sq; c++;}}}
+      turn=p[1]==='b'?8:0; cas=0; const cs=p[2]||'-';
+      if(cs.includes('K'))cas|=1; if(cs.includes('Q'))cas|=2; if(cs.includes('k'))cas|=4; if(cs.includes('q'))cas|=8;
+      ep=(p[3]&&p[3]!=='-'&&p[3].length===2)?(((8-parseInt(p[3][1],10))<<4)|(p[3].charCodeAt(0)-97)):-1;
+      ply=0;
+    }
+    function atk(sq, by){
+      if(by===0){ if(!((sq+15)&0x88)&&b[sq+15]===1)return true; if(!((sq+17)&0x88)&&b[sq+17]===1)return true; }
+      else { if(!((sq-15)&0x88)&&b[sq-15]===9)return true; if(!((sq-17)&0x88)&&b[sq-17]===9)return true; }
+      for(let i=0;i<8;i++){const s=sq+N_OFF[i]; if(!(s&0x88)&&b[s]===(by|2))return true;}
+      for(let i=0;i<8;i++){const s=sq+K_OFF[i]; if(!(s&0x88)&&b[s]===(by|6))return true;}
+      for(let i=0;i<4;i++){let s=sq+B_OFF[i]; while(!(s&0x88)){const p=b[s]; if(p){if(p===(by|3)||p===(by|5))return true; break;} s+=B_OFF[i];}}
+      for(let i=0;i<4;i++){let s=sq+R_OFF[i]; while(!(s&0x88)){const p=b[s]; if(p){if(p===(by|4)||p===(by|5))return true; break;} s+=R_OFF[i];}}
+      return false;
+    }
+    function gen(caps){
+      const l=[], us=turn, th=us^8;
+      for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+        const sq=(r<<4)|c, p=b[sq]; if(!p||(p&8)!==us)continue; const t=p&7;
+        if(t===1){
+          const d=us===0?-16:16, sr=us===0?6:1, pr=us===0?0:7;
+          for(let k=0;k<2;k++){const cs=sq+(us===0?(k?-15:-17):(k?17:15)); if(cs&0x88)continue; const tp=b[cs]; if(tp&&(tp&8)===th)l.push(sq|(cs<<8)|((cs>>4)===pr?(5<<16):0)|(1<<20)); else if(cs===ep)l.push(sq|(cs<<8)|(3<<20));}
+          const o=sq+d; if(!(o&0x88)&&!b[o]){if((o>>4)===pr)l.push(sq|(o<<8)|(5<<16)); else if(!caps){l.push(sq|(o<<8)); if(r===sr&&!b[o+d])l.push(sq|((o+d)<<8)|(8<<20));}}
+        } else if(t===2||t===6){
+          const offs=t===2?N_OFF:K_OFF;
+          for(let i=0;i<8;i++){const to=sq+offs[i]; if(to&0x88)continue; const tp=b[to]; if(!tp){if(!caps)l.push(sq|(to<<8));}else if((tp&8)===th)l.push(sq|(to<<8)|(1<<20));}
+          if(t===6&&!caps){
+            if(us===0&&sq===0x74){if((cas&1)&&!b[0x75]&&!b[0x76]&&!atk(0x74,8)&&!atk(0x75,8)&&!atk(0x76,8))l.push(0x74|(0x76<<8)|(4<<20)); if((cas&2)&&!b[0x73]&&!b[0x72]&&!b[0x71]&&!atk(0x74,8)&&!atk(0x73,8)&&!atk(0x72,8))l.push(0x74|(0x72<<8)|(4<<20));}
+            else if(us===8&&sq===0x04){if((cas&4)&&!b[0x05]&&!b[0x06]&&!atk(0x04,0)&&!atk(0x05,0)&&!atk(0x06,0))l.push(0x04|(0x06<<8)|(4<<20)); if((cas&8)&&!b[0x03]&&!b[0x02]&&!b[0x01]&&!atk(0x04,0)&&!atk(0x03,0)&&!atk(0x02,0))l.push(0x04|(0x02<<8)|(4<<20));}
+          }
+        } else {
+          const offs=t===3?B_OFF:(t===4?R_OFF:K_OFF);
+          for(let i=0;i<offs.length;i++){let to=sq+offs[i]; while(!(to&0x88)){const tp=b[to]; if(!tp){if(!caps)l.push(sq|(to<<8));}else{if((tp&8)===th)l.push(sq|(to<<8)|(1<<20)); break;} to+=offs[i];}}
+        }
+      }
+      return l;
+    }
+    function mk(mv){
+      const f=mv&0xFF, t=(mv>>8)&0xFF, pr=(mv>>16)&0x0F, fl=(mv>>20)&0x0F, p=b[f], us=turn;
+      uC[ply]=b[t]; uCa[ply]=cas; uE[ply]=ep; uW[ply]=kSq[0]; uB[ply]=kSq[1];
+      b[t]=pr?(us|pr):p; b[f]=0;
+      if(fl&2){const cs=us===0?t+16:t-16; uC[ply]=b[cs]; b[cs]=0;}
+      else if(fl&4){if(t===0x76){b[0x75]=b[0x77];b[0x77]=0;}else if(t===0x72){b[0x73]=b[0x70];b[0x70]=0;}else if(t===0x06){b[0x05]=b[0x07];b[0x07]=0;}else if(t===0x02){b[0x03]=b[0x00];b[0x00]=0;}}
+      if((p&7)===6)kSq[us===0?0:1]=t;
+      ep=(fl&8)?(us===0?f-16:f+16):-1;
+      if(f===0x74||t===0x74)cas&=~3; if(f===0x77||t===0x77)cas&=~1; if(f===0x70||t===0x70)cas&=~2;
+      if(f===0x04||t===0x04)cas&=~12; if(f===0x07||t===0x07)cas&=~4; if(f===0x00||t===0x00)cas&=~8;
+      turn^=8; ply++;
+      const mkK=kSq[us===0?0:1];
+      if(mkK>=0&&atk(mkK,turn)){unmk(mv);return false;}
+      return true;
+    }
+    function unmk(mv){
+      ply--; turn^=8; const us=turn, f=mv&0xFF, t=(mv>>8)&0xFF, pr=(mv>>16)&0x0F, fl=(mv>>20)&0x0F;
+      cas=uCa[ply]; ep=uE[ply]; kSq[0]=uW[ply]; kSq[1]=uB[ply];
+      b[f]=pr?(us|1):b[t];
+      if(fl&2){b[t]=0; b[us===0?t+16:t-16]=uC[ply];}
+      else{b[t]=uC[ply]; if(fl&4){if(t===0x76){b[0x77]=b[0x75];b[0x75]=0;}else if(t===0x72){b[0x70]=b[0x73];b[0x73]=0;}else if(t===0x06){b[0x07]=b[0x05];b[0x05]=0;}else if(t===0x02){b[0x00]=b[0x03];b[0x03]=0;}}}
+    }
+    function ev(){
+      let w=0, pcs=0;
+      for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+        const p=b[(r<<4)|c]; if(!p)continue; pcs++;
+        const t=p&7, isB=(p&8)!==0;
+        let v=VAL[t];
+        if(t===1) v+=(isB?(r-1):(6-r))*10+((c===3||c===4)&&(r===3||r===4)?18:0);
+        else if(t===2||t===3) v+=(r>=2&&r<=5&&c>=2&&c<=5)?16:0;
+        else if(t===6&&pcs<=6){ const cd=Math.abs(3.5-r)+Math.abs(3.5-c); v-=cd*12; }
+        w+=isB?-v:v;
+      }
+      return turn===0?w:-w;
+    }
+    function qs(a,bt,qd){
+      nodes++; if((nodes&1023)===0&&Date.now()>=dead){abrt=true;return 0;}
+      const sp=ev(); if(sp>=bt)return bt; if(sp>a)a=sp; if(qd<=0)return a;
+      const ms=gen(true); ms.sort((x,y)=>(VAL[b[(y>>8)&0xFF]&7]||0)-(VAL[b[(x>>8)&0xFF]&7]||0));
+      for(let i=0;i<ms.length;i++){if(!mk(ms[i]))continue; const s=-qs(-bt,-a,qd-1); unmk(ms[i]); if(abrt)return 0; if(s>=bt)return bt; if(s>a)a=s;}
+      return a;
+    }
+    function ab(d,a,bt){
+      nodes++; if((nodes&1023)===0&&Date.now()>=dead){abrt=true;return 0;}
+      const inC=kSq[turn===0?0:1]>=0&&atk(kSq[turn===0?0:1],turn^8);
+      if(d<=0){ if(!inC) return qs(a,bt,4); d=1; }
+      const ms=gen(false); ms.sort((x,y)=>(VAL[b[(y>>8)&0xFF]&7]||0)-(VAL[b[(x>>8)&0xFF]&7]||0));
+      let leg=0, best=-999999;
+      for(let i=0;i<ms.length;i++){if(!mk(ms[i]))continue; leg++; const s=-ab(d-1,-bt,-a); unmk(ms[i]); if(abrt)return 0; if(s>best)best=s; if(s>a)a=s; if(a>=bt)break;}
+      if(leg===0)return inC?(-90000+ply*50):0;
+      return best;
+    }
+    function toObj(mv){
+      const pm={2:'n',3:'b',4:'r',5:'q'};
+      return { from: FILES[mv&7]+(8-((mv&0xFF)>>4)), to: FILES[(mv>>8)&7]+(8-(((mv>>8)&0xFF)>>4)), promotion: pm[(mv>>16)&0x0F]||undefined };
+    }
+    self.onmessage=function(e){
+      const m=e.data; if(!m||m.type!=='BOT')return;
+      loadFen(m.fen); const ps=gen(false), legs=[];
+      for(let i=0;i<ps.length;i++){if(mk(ps[i])){legs.push(ps[i]); unmk(ps[i]);}}
+      if(!legs.length){self.postMessage({reqId:m.reqId, move:null});return;}
+      dead=Date.now()+(m.elo>=1500?280:160); nodes=0; abrt=false;
+      const maxD=m.elo>=1500?4:(m.elo>=900?3:2);
+      let res=legs.map(mv=>({mv, sc:0}));
+      for(let d=1;d<=maxD;d++){
+        const cur=[];
+        for(let i=0;i<res.length;i++){mk(res[i].mv); const s=-ab(d-1,-999999,999999); unmk(res[i].mv); if(abrt)break; cur.push({mv:res[i].mv, sc:s});}
+        if(abrt)break;
+        cur.sort((x,y)=>y.sc-x.sc); res=cur;
+        if(Math.abs(res[0].sc)>85000)break;
+      }
+      // Realistic human-like noise based on Boss ELO
+      let pick=res[0];
+      if(m.elo<=650 && res.length>1){
+        const r=Math.random();
+        const pool=res.slice(0, Math.min(6, res.length));
+        if(r<0.42) pick=pool[Math.floor(Math.random()*Math.min(3, pool.length))];
+        else if(r<0.68) pick=pool[Math.floor(Math.random()*pool.length)];
+      } else if(m.elo<=1050 && res.length>1){
+        const r=Math.random();
+        const good=res.filter(x=>x.sc>=res[0].sc-140).slice(0, 3);
+        if(r<0.32 && good.length>1) pick=good[Math.floor(Math.random()*good.length)];
+      }
+      self.postMessage({reqId:m.reqId, move:toObj(pick.mv)});
+    };
+  `;
+
+  let v43BotWorker = null;
+  try {
+    v43BotWorker = new Worker(URL.createObjectURL(new Blob([climbBotSrc], { type: 'application/javascript' })));
+  } catch (e) {}
+
+  // -------------------------------------------------------------------------
+  // 6. VERIFIED CONTENT DECKS FOR LEVELS 1–10 + ENDLESS BLUNDER DODGER
+  // -------------------------------------------------------------------------
+  const SNIPER_M1_DECK = [
+    { fen: '6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1', title: 'Back-Rank Blast', hint: 'Slide your Rook to the 8th rank!' },
+    { fen: 'r4rk1/ppp2ppp/5B1Q/8/8/8/PPP2PPP/R5K1 w - - 0 1', title: 'Kiss of Death', hint: 'Your Bishop guards g7!' },
+    { fen: 'r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4', title: "Scholar's Knockout", hint: 'Strike the weak f7 pawn!' },
+    { fen: '6rk/6pp/8/4N3/8/8/5PPP/6K1 w - - 0 1', title: 'Smothered Sniper', hint: 'Jump your Knight to check the trapped King!' },
+    { fen: '7k/R7/5N2/8/8/8/5PPP/6K1 w - - 0 1', title: 'Arabian Mate', hint: 'Your Knight guards h7 and blocks g8!' },
+    { fen: 'r4rk1/ppp2ppp/8/8/4Q3/3B4/PPP2PPP/R5K1 w - - 0 1', title: 'Queen + Bishop Battery', hint: 'Hit h7 with backup from your Bishop!' },
+    { fen: '6k1/5ppp/8/8/4Q3/8/5PPP/4R1K1 w - - 0 1', title: 'Back-Rank Queen', hint: 'Drop the Queen onto the 8th rank!' },
+    { fen: 'r4rk1/ppp2ppp/5Q2/8/8/8/PBP2PPP/R5K1 w - - 0 1', title: 'Long-Diagonal Sniper', hint: 'Your b2 Bishop snipes all the way to g7!' }
+  ];
+
+  const SNIPER_M2_DECK = [
+    { fen: '1Q3rk1/4pppp/8/8/8/8/5PPP/3R2K1 w - - 0 1', title: 'Queen Sac Back-Rank', m1: ['b8','f8'], reply: ['g8','f8'], hint: 'Sacrifice the Queen to clear the 8th rank!' },
+    { fen: '5r1k/6pp/7N/8/8/1Q6/5PPP/6K1 w - - 0 1', title: 'Philidor Smothered Mate', m1: ['b3','g8'], reply: ['f8','g8'], hint: 'Force their Rook to trap their own King!' },
+    { fen: '5rk1/5ppp/8/7Q/2B5/8/5PPP/3R2K1 w - - 0 1', title: 'Deflection Knockout', m1: ['h5','f7'], reply: ['f8','f7'], hint: 'Capture f7 with check—your Bishop guards it!' },
+    { fen: '2kr1b1r/pp1npppp/2p5/8/5B2/2QB4/PPP2PPP/R5K1 w - - 0 1', title: "Boden's Criss-Cross", m1: ['c3','c6'], reply: ['b7','c6'], hint: 'Sacrifice your Queen on c6 to open a6 for the Bishop!' },
+    { fen: '4kb1r/p2n1ppp/4q3/4p1B1/4P3/1Q6/PPP2PPP/2KR4 w k - 0 1', title: "Morphy's Opera Mate", m1: ['b3','b8'], reply: ['d7','b8'], hint: 'Sacrifice the Queen on b8, then slam the Rook down!' },
+    { fen: 'r1b3k1/ppp2ppp/8/8/2B5/5Q2/PPP2PPP/R5K1 w - - 0 1', title: 'f7-to-g8 Finish', m1: ['f3','f7'], reply: ['g8','h8'], hint: 'Check on f7 first, then finish on the back rank!' },
+    { fen: '2r1r1k1/5ppp/8/8/8/8/4QPPP/4R1K1 w - - 0 1', title: 'Battery Breakthrough', m1: ['e2','e8'], reply: ['c8','e8'], hint: 'Trade the Queen for their Rook to break through!' }
+  ];
+
+  const BLUNDER_DODGER_DECK = [
+    // Tier 1 (Hanging pieces, forks & mate traps)
+    { tier: 1, fen: 'r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4', safe: { from: 'e1', to: 'g1' }, blunder: { from: 'f3', to: 'e5' }, punish: { from: 'c6', to: 'e5' }, why: 'That e5 pawn was guarded by their c6 Knight—Nxe5 lost your Knight!' },
+    { tier: 1, fen: 'rnb1kbnr/pppp1ppp/8/4p3/4P2q/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3', safe: { from: 'f3', to: 'h4' }, blunder: { from: 'g2', to: 'g3' }, punish: { from: 'h4', to: 'e4' }, why: 'g3 missed the free Queen AND walked straight into Qxe4+ forking your Rook!' },
+    { tier: 1, fen: 'r1b1kbnr/pppp1ppp/2n5/4p3/2B1P2q/8/PPPP1PPP/RNBQK1NR w KQkq - 2 4', safe: { from: 'b1', to: 'c3' }, blunder: { from: 'g2', to: 'g3' }, punish: { from: 'h4', to: 'e4' }, why: 'g3 left your e4 pawn hanging to Qxe4+, forking your King and Rook!' },
+    { tier: 1, fen: '3r2k1/5ppp/2p5/8/8/8/R1Q2PPP/6K1 w - - 0 1', safe: { from: 'h2', to: 'h3' }, blunder: { from: 'c2', to: 'c6' }, punish: { from: 'd8', to: 'd1' }, why: 'Grabbing c6 left your back rank wide open to Rd1# Checkmate!' },
+    { tier: 1, fen: 'r1bqk1nr/ppp2pbp/2n3p1/4p3/4P3/2N2N2/P1PP1PPP/R1BQKB1R w KQkq - 0 6', safe: { from: 'c1', to: 'b2' }, blunder: { from: 'f3', to: 'e5' }, punish: { from: 'g7', to: 'e5' }, why: 'Their g7 sniper Bishop was aiming straight at e5!' },
+    { tier: 1, fen: 'r1bqk2r/ppp2ppp/3p1n2/2b1p3/1nB1P3/3P1NQ1/PPP2PPP/RNB1K2R w KQkq - 3 6', safe: { from: 'b1', to: 'a3' }, blunder: { from: 'a2', to: 'a3' }, punish: { from: 'b4', to: 'c2' }, why: 'a3 didn’t stop Nxc2+—their Knight forked your King and Rook!' },
+    { tier: 1, fen: 'r1b1k2r/ppp2ppp/2n5/q2p4/1bBPn3/2N2N2/PPP2PPP/R1BQK2R w KQkq - 3 7', safe: { from: 'e1', to: 'g1' }, blunder: { from: 'c4', to: 'd5' }, punish: { from: 'a5', to: 'd5' }, why: 'Your c3 Knight was PINNED by their b4 Bishop—it couldn’t recapture Qxd5!' },
+    { tier: 1, fen: 'r1b1k1nr/pppp1ppp/2n5/2b1p3/2B1P2q/2NP4/PPP2PPP/R1BQK1NR w KQkq - 2 5', safe: { from: 'd1', to: 'e2' }, blunder: { from: 'g1', to: 'f3' }, punish: { from: 'h4', to: 'f2' }, why: 'Attacking their Queen ignored f2—Qxf2# was instant Checkmate!' },
+    // Tier 2 (Pins, skewers, overloaded defenders & hidden mates)
+    { tier: 2, fen: '4r1k1/ppp2ppp/2n5/8/8/2P5/PP2QPPP/R3K2R w KQ - 0 14', safe: { from: 'e1', to: 'g1' }, blunder: { from: 'a1', to: 'd1' }, punish: { from: 'e8', to: 'e2' }, why: 'Your Queen was pinned on the e-file—Rxe2+ won your Queen for a Rook!' },
+    { tier: 2, fen: 'r1b1k2r/pp3ppp/2n1pn2/qB1p4/3P4/2N2N2/PPP2PPP/R1BQ1RK1 w kq - 2 9', safe: { from: 'c1', to: 'd2' }, blunder: { from: 'c3', to: 'd5' }, punish: { from: 'a5', to: 'b5' }, why: 'Your c3 Knight was the ONLY piece defending your b5 Bishop—Qxb5 won it!' },
+    { tier: 2, fen: 'r4rk1/ppp2ppp/2n5/6q1/8/2P2N1b/PP3PPP/R2Q1RK1 w - - 2 13', safe: { from: 'f3', to: 'g5' }, blunder: { from: 'g2', to: 'g3' }, punish: { from: 'h3', to: 'f1' }, why: 'You could have taken their Queen on g5! Playing g3 dropped your Rook instead.' },
+    { tier: 2, fen: 'r1b2rk1/ppp2ppp/2nb4/7q/3P4/3B1N2/PPP2PPP/R2Q1RK1 w - - 2 11', safe: { from: 'h2', to: 'h3' }, blunder: { from: 'f3', to: 'g5' }, punish: { from: 'h5', to: 'h2' }, why: 'Your f3 Knight was the ONLY guard of h2—moving it allowed Qxh2#!' },
+    { tier: 2, fen: '4r1k1/5ppp/8/8/8/2Q5/5PPP/4R1K1 w - - 0 25', safe: { from: 'e1', to: 'e8' }, blunder: { from: 'c3', to: 'a4' }, punish: { from: 'e8', to: 'e1' }, why: 'Rxe8# was Checkmate—Qa4 left e1 undefended and got mated instead!' },
+    { tier: 2, fen: 'r3k2r/ppp2ppp/b1n5/8/2B5/2N5/PPP2PPP/R2Q1RK1 w kq - 1 10', safe: { from: 'c4', to: 'a6' }, blunder: { from: 'c4', to: 'b3' }, punish: { from: 'a6', to: 'f1' }, why: 'Retreating your Bishop let their a6 Bishop snipe your f1 Rook!' },
+    { tier: 2, fen: '4r1k1/5ppp/8/8/3n4/2Q5/5PPP/4R1K1 w - - 0 26', safe: { from: 'e1', to: 'e8' }, blunder: { from: 'c3', to: 'd4' }, punish: { from: 'e8', to: 'e1' }, why: 'Greedy Queen grab! Qxd4 dropped your back-rank guard and allowed Rxe1#!' },
+    { tier: 2, fen: 'r1b2rk1/ppp2ppp/2n5/2b1p3/3QP3/2N2N2/PPP2PPP/R1B2RK1 w - - 0 8', safe: { from: 'd4', to: 'c5' }, blunder: { from: 'f3', to: 'e5' }, punish: { from: 'c6', to: 'd4' }, why: 'Your Queen on d4 was under attack—Nxe5 lost your Queen to Nxd4!' }
+  ];
+
+  const CRIME_SCENE_DECK = [
+    {
+      title: 'Case #1: Wayward Queen Trap',
+      startFen: 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2',
+      clip: [
+        { from: 'd1', to: 'h5', san: 'Qh5', who: 'White' },
+        { from: 'g7', to: 'g6', san: 'g6', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: { from: 'h5', to: 'e5' },
+      explain: 'g6 left the e5 pawn undefended—Qxe5+ forks King & Rook!'
+    },
+    {
+      title: 'Case #2: Back-Rank Tunnel Vision',
+      startFen: '3r2k1/5ppp/8/8/8/8/3P1PPP/4R1K1 w - - 0 24',
+      clip: [
+        { from: 'h2', to: 'h3', san: 'h3', who: 'White' },
+        { from: 'd8', to: 'd2', san: 'Rxd2', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: { from: 'e1', to: 'e8' },
+      explain: 'Rxd2 abandoned the 8th rank—Re8# is instant Checkmate!'
+    },
+    {
+      title: 'Case #3: Ignoring f7',
+      startFen: 'r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4',
+      clip: [
+        { from: 'f3', to: 'g5', san: 'Ng5', who: 'White' },
+        { from: 'h7', to: 'h6', san: 'h6', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: { from: 'g5', to: 'f7' },
+      explain: 'h6 forgot about f7—Nxf7 forks their Queen and Rook!'
+    },
+    {
+      title: 'Case #4: Tunnel Vision Queen Hang',
+      startFen: 'r1b1k2r/ppp2ppp/2n2n2/3q4/3P4/5N2/PPP2PPP/RNBQKB1R w KQkq - 0 6',
+      clip: [
+        { from: 'b1', to: 'c3', san: 'Nc3', who: 'White' },
+        { from: 'c8', to: 'g4', san: 'Bg4', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: { from: 'c3', to: 'd5' },
+      explain: 'Bg4 ignored that Nc3 was attacking their Queen—Nxd5 wins it!'
+    },
+    {
+      title: 'Case #5: Walking Into the Pin',
+      startFen: 'r1b1k2r/ppp2ppp/2n2q2/8/8/2N5/PPP2PPP/R1BQ1RK1 w kq - 0 9',
+      clip: [
+        { from: 'c3', to: 'd5', san: 'Nd5', who: 'White' },
+        { from: 'f6', to: 'e5', san: 'Qe5', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: { from: 'f1', to: 'e1' },
+      explain: 'Qe5 stepped directly in front of their uncastled King—Re1 pins & wins the Queen!'
+    }
+  ];
+
+  const OPENING_SURVIVAL_E4 = [
+    {
+      name: 'Italian Game (1...e5)',
+      steps: [
+        { accept: ['e4'], cue: 'Claim the center with 1. e4!', bot: 'e5' },
+        { accept: ['Nf3'], cue: 'Attack e5 and bring out your Knight!', bot: 'Nc6' },
+        { accept: ['Bc4'], cue: 'Aim your Bishop straight at weak f7!', bot: 'Bc5' },
+        { accept: ['O-O', 'c3', 'd3', 'Nc3'], cue: 'Castle your King or support the center!', bot: null }
+      ]
+    },
+    {
+      name: 'Sicilian Defense (1...c5)',
+      steps: [
+        { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'c5' },
+        { accept: ['Nf3'], cue: 'Develop the Knight and prepare d4!', bot: 'd6' },
+        { accept: ['d4'], cue: 'Break open the center right now!', bot: 'cxd4' },
+        { accept: ['Nxd4'], cue: 'Recapture in the center with your Knight!', bot: null }
+      ]
+    },
+    {
+      name: 'French Defense (1...e6)',
+      steps: [
+        { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'e6' },
+        { accept: ['d4'], cue: 'They gave you the center—take it with d4!', bot: 'd5' },
+        { accept: ['Nc3'], cue: 'Defend e4 while developing a Knight!', bot: 'Nf6' },
+        { accept: ['e5', 'Bg5', 'exd5'], cue: 'Push e5 to kick the Knight, or pin with Bg5!', bot: null }
+      ]
+    },
+    {
+      name: 'Caro-Kann Defense (1...c6)',
+      steps: [
+        { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'c6' },
+        { accept: ['d4'], cue: 'Claim the full two-pawn center!', bot: 'd5' },
+        { accept: ['Nc3'], cue: 'Protect e4 and develop cleanly!', bot: 'dxe4' },
+        { accept: ['Nxe4'], cue: 'Recapture the central pawn with your Knight!', bot: null }
+      ]
+    },
+    {
+      name: 'Scandinavian Defense (1...d5)',
+      steps: [
+        { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'd5' },
+        { accept: ['exd5'], cue: 'Capture their center pawn right away!', bot: 'Qxd5' },
+        { accept: ['Nc3'], cue: 'Develop AND kick their Queen with tempo!', bot: 'Qa5' },
+        { accept: ['d4', 'Nf3', 'Bc4'], cue: 'Grab the center with d4 or bring out a piece!', bot: null }
+      ]
+    }
+  ];
+
+  const FINISH_HIM_LV3 = [
+    { name: '2-Rook Ladder Mate', fen: '4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1', tip: 'Use your two Rooks like a ladder to push their King to the edge!', botElo: 1400 },
+    { name: 'King + Queen Checkmate', fen: '4k3/8/8/8/8/8/8/3QK3 w - - 0 1', tip: 'Box the King into a corner, bring YOUR King close, and avoid Stalemate!', botElo: 1500 }
+  ];
+
+  const FINISH_HIM_LV9 = [
+    { name: 'King + Rook Checkmate', fen: '4k3/8/8/8/8/8/8/4K2R w K - 0 1', tip: 'Cut off the King with your Rook, step your King opposite theirs, then check!', botElo: 1600 },
+    { name: 'King + Pawn Promotion', fen: '8/4k3/8/4K3/4P3/8/8/8 w - - 0 1', tip: 'Keep your King IN FRONT of the pawn to escort it to a Queen and mate!', botElo: 1700 }
+  ];
+
+  // Full 25-Level Roadmap Catalog
+  const ROADMAP_TIERS = [
+    {
+      tier: 1, title: 'Tier 1: Street Arena', eloRange: '0 → 600 ELO',
+      levels: [
+        { num: 1, icon: '💀', mode: 'Checkmate Sniper', sub: '8 Mate-in-1 rapid-fire shots', type: 'sniper_m1' },
+        { num: 2, icon: '⚡', mode: 'Blunder Dodger', sub: '8-round 50/50 trap dodger', type: 'dodger_t1' },
+        { num: 3, icon: '🔪', mode: 'Finish Him!', sub: '2-Rook Ladder & King+Queen mate', type: 'finish_lv3' },
+        { num: 4, icon: '🔍', mode: 'Crime Scene', sub: 'Spot & punish 5 classic blunders', type: 'crime_lv4' },
+        { num: 5, icon: '👑', mode: 'BOSS: 600 ELO', sub: '🧊 3s Freeze-Frame • 0 Undos', type: 'boss_600', isBoss: true }
+      ]
+    },
+    {
+      tier: 2, title: 'Tier 2: Club Circuit', eloRange: '600 → 1000 ELO',
+      levels: [
+        { num: 6, icon: '🌲', mode: 'Opening Survival', sub: '1.e4 vs 5 defenses • 0 arrows • 3 Hearts', type: 'opening_e4' },
+        { num: 7, icon: '💀', mode: 'Checkmate Sniper II', sub: '7 forced Mate-in-2 knockouts', type: 'sniper_m2' },
+        { num: 8, icon: '⚡', mode: 'Blunder Dodger II', sub: '8 tactical traps • 9s shot clock', type: 'dodger_t2' },
+        { num: 9, icon: '🔪', mode: 'Finish Him! II', sub: 'King+Rook mate & Pawn promotion', type: 'finish_lv9' },
+        { num: 10, icon: '👑', mode: 'BOSS: 1000 ELO', sub: '🧊 5s Freeze-Frame • 0 Undos', type: 'boss_1000', isBoss: true }
+      ]
+    },
+    {
+      tier: 3, title: 'Tier 3: Tactician Tower (V44)', eloRange: '1000 → 1400 ELO',
+      levels: [
+        { num: 11, icon: '🌲', mode: 'Black Repertoire Survival', sub: 'Defend vs 1.e4 & 1.d4 • 0 arrows', soon: true },
+        { num: 12, icon: '🔍', mode: 'Crime Scene II', sub: 'Overloaded pieces & hidden tactics', soon: true },
+        { num: 13, icon: '🛡️', mode: 'Escape Artist', sub: 'Survive 5 scary King attacks', soon: true },
+        { num: 14, icon: '🔪', mode: 'Finish Him! III', sub: 'Convert +4 middlegames vs 1800 Bot', soon: true },
+        { num: 15, icon: '👑', mode: 'BOSS: 1400 ELO', sub: 'Beat 1400 Boss • Challenging • 0 Undos', soon: true, isBoss: true }
+      ]
+    },
+    {
+      tier: 4, title: 'Tier 4: Master Hall (V44)', eloRange: '1400 → 1800 ELO',
+      levels: [
+        { num: 16, icon: '⚡', mode: 'Blunder Dodger: Speed', sub: '8s clock • Zwischenzug & X-rays', soon: true },
+        { num: 17, icon: '⚖️', mode: "Who's Winning?", sub: 'Read weak pawns, outposts & files', soon: true },
+        { num: 18, icon: '💀', mode: 'Checkmate Sniper III', sub: 'Mate-in-3 & castled-King sacs', soon: true },
+        { num: 19, icon: '🔪', mode: 'Lucena & Philidor Lab', sub: 'Master rook endgames vs 2200 Bot', soon: true },
+        { num: 20, icon: '👑', mode: 'BOSS: 1800 ELO', sub: 'Beat 1800 Boss • 75%+ Accuracy', soon: true, isBoss: true }
+      ]
+    },
+    {
+      tier: 5, title: 'Tier 5: GM Summit (V44)', eloRange: '1800 → 2500+ ELO',
+      levels: [
+        { num: 21, icon: '🔍', mode: 'GM Crime Scene', sub: 'Spot subtle Grandmaster slips', soon: true },
+        { num: 22, icon: '🛡️', mode: 'Escape Artist II', sub: 'Hold worse endgames vs 2500 Bot', soon: true },
+        { num: 23, icon: '⚡', mode: 'Blunder Dodger: Hardcore', sub: '15-streak • 6s clock • 2000+ positions', soon: true },
+        { num: 24, icon: '🔪', mode: 'GM Conversion', sub: 'Convert a +2 edge vs 2500 Bot', soon: true },
+        { num: 25, icon: '👑', mode: 'FINAL GAUNTLET', sub: 'Defeat 2200 → 2500 → 2850 Bosses', soon: true, isBoss: true }
+      ]
+    }
+  ];
+
+  // -------------------------------------------------------------------------
+  // 7. CLIMB SESSION ENGINE (100% ISOLATED BOARD & INPUT CONTROLLER!)
+  // -------------------------------------------------------------------------
+  let v43Session = null; // Active playable session state or null when on Roadmap
+
+  function stopClimbTimers(s) {
+    if (!s) return;
+    if (v43CountdownTimer) { clearTimeout(v43CountdownTimer); v43CountdownTimer = null; }
+    (s.timers || []).forEach(t => t.isInt ? clearInterval(t.id) : clearTimeout(t.id));
+    s.timers = [];
+  }
+
+  function addSessTimer(s, id, isInt = false) {
+    if (!s) return id;
+    if (!s.timers) s.timers = [];
+    s.timers.push({ id, isInt });
+    return id;
+  }
+
+  function renderClimbBoardGraphics() {
+    const svg = ensureSvgLayer('v43ClimbBoardSvg');
+    if (!svg) return;
+    if (!v43Session) {
+      svg.innerHTML = '';
+      svg.classList.add('hidden');
+      return;
+    }
+
+    let out = '';
+    const s = v43Session;
+
+    // 1. Last move soft yellow squares
+    if (s.lastMove && s.lastMove.from && s.lastMove.to) {
+      [s.lastMove.from, s.lastMove.to].forEach(sq => {
+        const pt = sqToPt800(sq);
+        if (pt) out += `<rect x="${pt.col * 100}" y="${pt.row * 100}" width="100" height="100" fill="#f7c045" fill-opacity="0.28" />`;
+      });
+    }
+
+    // 2. Selected square & legal move dots (when player is moving pieces)
+    if (s.selectedSq && s.chess) {
+      const sp = sqToPt800(s.selectedSq);
+      if (sp) out += `<rect x="${sp.col * 100}" y="${sp.row * 100}" width="100" height="100" fill="#81b64c" fill-opacity="0.38" />`;
+      const legs = s.chess.moves({ square: s.selectedSq, verbose: true });
+      legs.forEach(m => {
+        const tp = sqToPt800(m.to);
+        if (!tp) return;
+        if (m.captured) {
+          out += `<circle cx="${tp.x}" cy="${tp.y}" r="43" fill="none" stroke="rgba(20,20,18,0.45)" stroke-width="8" />`;
+        } else {
+          out += `<circle cx="${tp.x}" cy="${tp.y}" r="15" fill="rgba(20,20,18,0.34)" />`;
+        }
+      });
+    }
+
+    // 3. Session tactical arrows (Blue A / Purple B / Red Punish / Green Fix)
+    const COLS = { blue: '#32b8e6', purple: '#a855f7', red: '#ef4444', green: '#81b64c', gold: '#f7c045' };
+    (s.arrows || []).forEach(ar => {
+      const p1 = sqToPt800(ar.from), p2 = sqToPt800(ar.to);
+      if (!p1 || !p2) return;
+      const col = COLS[ar.color] || COLS.green;
+      const pts = buildPolyArrowV43(p1.x, p1.y, p2.x, p2.y, 10.5, 23);
+      if (pts) out += `<polygon points="${pts}" fill="${col}" fill-opacity="0.92" stroke="rgba(16,15,13,0.6)" stroke-width="2" stroke-linejoin="round" />`;
+      if (ar.label) {
+        const lx = p2.col * 100 + 82, ly = p2.row * 100 + 18;
+        out += `<circle cx="${lx}" cy="${ly}" r="15" fill="${col}" stroke="#141311" stroke-width="2.5" />`;
+        out += `<text x="${lx}" y="${ly + 5}" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="900" font-family="Inter, sans-serif">${ar.label}</text>`;
+      }
+    });
+
+    svg.innerHTML = out;
+    svg.classList.remove('hidden');
+  }
+
+  function syncClimbBoardRender() {
+    if (!v43Session || !v43Session.chess) return;
+    window.demoOverrideFen = v43Session.chess.fen();
+    window.activeHintMove = null;
+    window.lessonClueSq = null;
+    window.lessonRefutationArrow = null;
+    boardFlipped = Boolean(v43Session.flipped);
+    window.renderBoard();
+    renderClimbBoardGraphics();
+    renderRightClickLayer();
+  }
+
+  function stopClimbSessionV43(returnToMap = true) {
+    if (v43Session) {
+      stopClimbTimers(v43Session);
+      v43Session = null;
+    }
+    document.body.classList.remove('v43-climb-live');
+    setOnScreenHudV43(null);
+    document.getElementById('v43CountdownOverlay')?.classList.add('hidden');
+    renderClimbBoardGraphics();
+    clearRightClickLayer();
+    window.demoOverrideFen = null;
+    if (typeof window.renderBoard === 'function') window.renderBoard();
+    if (returnToMap) renderClimbSidebarMapV43();
+  }
+
+  // ---- ISOLATED CLICK-TO-MOVE & DRAG-TO-MOVE INPUT ON boardEl FOR CLIMB ----
+  let v43DragOriginSq = null;
+
+  if (boardEl) {
+    boardEl.addEventListener('pointerdown', (e) => {
+      if (!v43Session || e.button !== 0) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      const s = v43Session;
+      const sq = clientXYToSq(e.clientX, e.clientY);
+      if (!sq) return;
+
+      // Special click-on-arrow support for Blunder Dodger (clicking Move A or Move B destination square!)
+      if (s.kind === 'dodger' && s.awaitingChoice) {
+        if (sq === s.optA.to || sq === s.optA.from) { handleDodgerPickV43('A'); return; }
+        if (sq === s.optB.to || sq === s.optB.from) { handleDodgerPickV43('B'); return; }
+        return;
+      }
+
+      if (!s.allowPieceInput || s.frozen || s.busy || !s.chess) return;
+
+      const piece = s.chess.get(sq);
+      const myCol = s.playerColor || 'w';
+
+      // Clicking a destination square when a piece is already selected
+      if (s.selectedSq && s.selectedSq !== sq) {
+        const tryMv = s.chess.moves({ square: s.selectedSq, verbose: true }).find(m => m.to === sq);
+        if (tryMv) {
+          const fromSq = s.selectedSq;
+          s.selectedSq = null;
+          v43DragOriginSq = null;
+          onClimbPlayerMoveAttempt(fromSq, sq);
+          return;
+        }
+      }
+
+      if (piece && piece.color === myCol && s.chess.turn() === myCol) {
+        s.selectedSq = sq;
+        v43DragOriginSq = sq;
+        renderClimbBoardGraphics();
+      } else {
+        s.selectedSq = null;
+        v43DragOriginSq = null;
+        renderClimbBoardGraphics();
+      }
+    }, true);
+
+    window.addEventListener('pointerup', (e) => {
+      if (!v43Session || e.button !== 0 || !v43DragOriginSq) return;
+      const fromSq = v43DragOriginSq;
+      v43DragOriginSq = null;
+      const s = v43Session;
+      if (!s.allowPieceInput || s.frozen || s.busy || !s.chess) return;
+      const toSq = clientXYToSq(e.clientX, e.clientY);
+      if (!toSq || toSq === fromSq) return;
+
+      const tryMv = s.chess.moves({ square: fromSq, verbose: true }).find(m => m.to === toSq);
+      if (tryMv) {
+        s.selectedSq = null;
+        onClimbPlayerMoveAttempt(fromSq, toSq);
+      }
+    }, true);
+  }
+
+  function onClimbPlayerMoveAttempt(fromSq, toSq) {
+    const s = v43Session;
+    if (!s || !s.onMove) return;
+    s.onMove(fromSq, toSq);
+  }
+
+  // -------------------------------------------------------------------------
+  // 8. PLAYABLE MODE CONTROLLERS (LEVELS 1–10 + ENDLESS BLUNDER DODGER!)
+  // -------------------------------------------------------------------------
+  function renderActiveClimbCard(headerTitle, bodyHtml, footerBtnsHtml = '') {
+    const container = document.getElementById('tabContentClimb');
+    if (!container) return;
+    container.innerHTML = `
+      <div class="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-white/10 flex-shrink-0">
+        <button id="v43BackToClimbMap" type="button" class="px-2.5 py-1.5 rounded-lg bg-[#2b2926] hover:bg-[#3a3834] text-xs font-bold text-white border border-white/10 transition">← Map</button>
+        <div class="text-xs font-extrabold text-white truncate flex-1 text-center">${headerTitle}</div>
+        <button id="v43RestartLvlBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-[#2b2926] hover:bg-[#3a3834] text-xs font-bold text-[#9ad165] border border-white/10 transition">↻</button>
+      </div>
+      <div id="v43ActiveBody" class="flex-1 overflow-y-auto space-y-3">${bodyHtml}</div>
+      ${footerBtnsHtml ? `<div class="pt-2.5 mt-2.5 border-t border-white/10 flex-shrink-0">${footerBtnsHtml}</div>` : ''}
+    `;
+    container.querySelector('#v43BackToClimbMap')?.addEventListener('click', () => stopClimbSessionV43(true));
+    container.querySelector('#v43RestartLvlBtn')?.addEventListener('click', () => {
+      const lvlCfg = v43Session && v43Session.restartFn;
+      if (lvlCfg) lvlCfg();
+    });
+  }
+
+  function showClimbVictoryOrFailScreen(won, title, summary, lvlNum, restartFn) {
+    if (v43Session) {
+      stopClimbTimers(v43Session);
+      v43Session.allowPieceInput = false;
+      v43Session.awaitingChoice = false;
+    }
+    setOnScreenHudV43(null);
+    try { playChessSound(won ? 'levelup' : 'gameover'); } catch (e) {}
+    if (won && lvlNum) markLevelCompleted(lvlNum, lvlNum % 5 === 0 ? 35 : 15);
+
+    const hasNext = Boolean(won && lvlNum && lvlNum < 10);
+    renderActiveClimbCard(
+      won ? '🏆 STAGE CLEARED!' : '💀 TRY AGAIN',
+      `
+        <div class="rounded-2xl p-5 bg-[#242320] border-2 ${won ? 'border-[#81b64c]' : 'border-[#ef4444]'} text-center space-y-3">
+          <div class="text-4xl">${won ? '🏆' : '💥'}</div>
+          <h3 class="text-base font-extrabold text-white">${title}</h3>
+          <p class="text-xs text-[#d6d4d0] leading-relaxed">${summary}</p>
+          <div class="pt-2 space-y-2">
+            ${hasNext ? `<button id="v43NextLevelGoBtn" type="button" class="w-full py-2.5 rounded-xl bg-[#81b64c] hover:bg-[#93c75e] text-white font-extrabold text-xs shadow transition">▶ Next Level (Lv. ${lvlNum + 1})</button>` : ''}
+            <button id="v43RetryEndBtn" type="button" class="w-full py-2.5 rounded-xl bg-[#32b8e6] hover:bg-[#49c6f0] text-[#141311] font-extrabold text-xs shadow transition">↻ Play Again</button>
+            <button id="v43MapEndBtn" type="button" class="w-full py-2 rounded-xl bg-[#2b2926] hover:bg-[#3a3834] text-[#d6d4d0] font-bold text-xs border border-white/10 transition">Back to Roadmap</button>
+          </div>
+        </div>
+      `
+    );
+
+    document.getElementById('v43RetryEndBtn')?.addEventListener('click', () => { if (restartFn) restartFn(); });
+    document.getElementById('v43MapEndBtn')?.addEventListener('click', () => stopClimbSessionV43(true));
+    document.getElementById('v43NextLevelGoBtn')?.addEventListener('click', () => startLevelByNumberV43(lvlNum + 1));
+  }
+
+  // =========================================================================
+  // MODE A: ⚡ BLUNDER DODGER (50/50 — LV. 2, LV. 8 & ENDLESS ARCADE!)
+  // =========================================================================
+  function startBlunderDodgerV43(opts) {
+    // opts: { endless, tier, totalRounds, timeSec, lvlNum, title }
+    stopClimbSessionV43(false);
+    document.body.classList.add('v43-climb-live');
+
+    const rawPool = opts.endless
+      ? BLUNDER_DODGER_DECK.slice()
+      : BLUNDER_DODGER_DECK.filter(p => p.tier === opts.tier);
+
+    // Runtime chess.js safety filter + shuffle
+    const validPool = rawPool.filter(p => {
+      try {
+        const s1 = new Chess(p.fen);
+        if (!s1.move({ from: p.safe.from, to: p.safe.to, promotion: 'q' })) return false;
+        const s2 = new Chess(p.fen);
+        if (!s2.move({ from: p.blunder.from, to: p.blunder.to, promotion: 'q' })) return false;
+        if (!s2.move({ from: p.punish.from, to: p.punish.to, promotion: 'q' })) return false;
+        return true;
+      } catch (e) { return false; }
+    });
+
+    const shuffle = (arr) => arr.slice().sort(() => Math.random() - 0.5);
+    let queue = shuffle(validPool);
+
+    const s = {
+      kind: 'dodger',
+      chess: new Chess(queue[0].fen),
+      flipped: false,
+      allowPieceInput: false,
+      awaitingChoice: false,
+      busy: false,
+      hearts: 3,
+      score: 0,
+      streak: 0,
+      roundIdx: 0,
+      totalRounds: opts.endless ? 999 : Math.min(opts.totalRounds || 8, queue.length),
+      endless: Boolean(opts.endless),
+      baseSec: opts.timeSec || 10,
+      lvlNum: opts.lvlNum || null,
+      timers: [],
+      arrows: [],
+      lastMove: null,
+      optA: null, optB: null, safeSide: 'A', curItem: null,
+      restartFn: () => startBlunderDodgerV43(opts)
+    };
+    v43Session = s;
+    syncClimbBoardRender();
+
+    renderActiveClimbCard(
+      opts.title || '⚡ Blunder Dodger',
+      `<div class="text-center py-8 text-xs text-[#9e9c99]">Get ready! Watch the board countdown...</div>`
+    );
+
+    runBoardCountdownV43(
+      opts.endless ? '⚡ ENDLESS BLUNDER DODGER' : `LEVEL ${opts.lvlNum} • BLUNDER DODGER`,
+      'Pick the SAFE move (Blue A or Purple B) before time runs out!',
+      () => loadNextDodgerRoundV43(queue, validPool)
+    );
+  }
+
+  function loadNextDodgerRoundV43(queue, validPool) {
+    const s = v43Session;
+    if (!s || s.kind !== 'dodger') return;
+    stopClimbTimers(s);
+
+    if (!s.endless && s.roundIdx >= s.totalRounds) {
+      showClimbVictoryOrFailScreen(
+        true,
+        `Blunder Dodger Cleared!`,
+        `You dodged <b>${s.score}/${s.totalRounds}</b> sneaky traps with <b>${'❤️'.repeat(s.hearts)}</b> left!`,
+        s.lvlNum,
+        s.restartFn
+      );
+      return;
+    }
+
+    if (s.roundIdx >= queue.length) {
+      queue.push(...validPool.slice().sort(() => Math.random() - 0.5));
+    }
+    const item = queue[s.roundIdx];
+    s.curItem = item;
+    s.chess = new Chess(item.fen);
+
+    // Resolve exact SAN labels for Safe & Blunder
+    const simSafe = new Chess(item.fen);
+    const mvSafe = simSafe.move({ from: item.safe.from, to: item.safe.to, promotion: 'q' });
+    const simBlun = new Chess(item.fen);
+    const mvBlun = simBlun.move({ from: item.blunder.from, to: item.blunder.to, promotion: 'q' });
+
+    const safeIsA = Math.random() < 0.5;
+    s.safeSide = safeIsA ? 'A' : 'B';
+    s.optA = safeIsA ? { ...item.safe, san: mvSafe.san } : { ...item.blunder, san: mvBlun.san };
+    s.optB = safeIsA ? { ...item.blunder, san: mvBlun.san } : { ...item.safe, san: mvSafe.san };
+
+    s.arrows = [
+      { from: s.optA.from, to: s.optA.to, color: 'blue', label: 'A' },
+      { from: s.optB.from, to: s.optB.to, color: 'purple', label: 'B' }
+    ];
+    s.lastMove = null;
+    s.awaitingChoice = true;
+    s.busy = false;
+    s._queueRef = queue;
+    s._poolRef = validPool;
+    syncClimbBoardRender();
+
+    // Escalate speed gently in Endless mode (10s -> 8s -> 6.5s)
+    const secLimit = s.endless ? Math.max(6.5, s.baseSec - Math.floor(s.score / 5) * 1.2) : s.baseSec;
+    const totalMs = secLimit * 1000;
+    const startTs = Date.now();
+
+    const heartsStr = '❤️'.repeat(s.hearts) + '🖤'.repeat(Math.max(0, 3 - s.hearts));
+    const roundLbl = s.endless ? `Score: ${s.score} (Best: ${climbSave.endlessBest})` : `Round ${s.roundIdx + 1}/${s.totalRounds}`;
+
+    renderActiveClimbCard(
+      s.endless ? '⚡ Endless Blunder Dodger' : `Lv. ${s.lvlNum} • Blunder Dodger`,
+      `
+        <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+          <div class="flex items-center justify-between text-xs font-bold">
+            <span class="text-[#d6d4d0]">${roundLbl}</span>
+            <span>${heartsStr}</span>
+          </div>
+          <div class="text-xs text-[#b5b3b0]">One arrow is safe or winning. The other walks into a trap! Click a button below or click the arrow on the board:</div>
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button id="v43PickABtn" type="button" class="v43-choice-btn v43-choice-a">A • ${s.optA.san}</button>
+            <button id="v43PickBBtn" type="button" class="v43-choice-btn v43-choice-b">B • ${s.optB.san}</button>
+          </div>
+          <div id="v43DodgerFeedback" class="hidden p-2.5 rounded-lg bg-[#161512] border border-white/10 text-xs leading-relaxed"></div>
+        </div>
+      `
+    );
+
+    document.getElementById('v43PickABtn')?.addEventListener('click', () => handleDodgerPickV43('A'));
+    document.getElementById('v43PickBBtn')?.addEventListener('click', () => handleDodgerPickV43('B'));
+
+    const tickId = setInterval(() => {
+      if (!v43Session || v43Session !== s || !s.awaitingChoice) { clearInterval(tickId); return; }
+      const rem = Math.max(0, totalMs - (Date.now() - startTs));
+      const pct = (rem / totalMs) * 100;
+      const isLow = rem <= 3000;
+      setOnScreenHudV43({
+        mode: isLow ? 'danger' : 'normal',
+        left: `⚡ PICK THE SAFE MOVE • ${roundLbl}`,
+        right: `<span>${heartsStr}</span><span style="color:${isLow ? '#fca5a5' : '#81b64c'};">${(rem / 1000).toFixed(1)}s</span>`,
+        pct,
+        barColor: isLow ? '#ef4444' : (pct < 55 ? '#f7c045' : '#81b64c')
+      });
+      if (rem <= 0) {
+        clearInterval(tickId);
+        handleDodgerPickV43('TIMEOUT');
+      }
+    }, 60);
+    addSessTimer(s, tickId, true);
+  }
+
+  function handleDodgerPickV43(choice) {
+    const s = v43Session;
+    if (!s || s.kind !== 'dodger' || !s.awaitingChoice) return;
+    s.awaitingChoice = false;
+    stopClimbTimers(s);
+
+    const btnA = document.getElementById('v43PickABtn');
+    const btnB = document.getElementById('v43PickBBtn');
+    if (btnA) btnA.disabled = true;
+    if (btnB) btnB.disabled = true;
+
+    const fb = document.getElementById('v43DodgerFeedback');
+    const item = s.curItem;
+    const isCorrect = (choice === s.safeSide);
+
+    if (isCorrect) {
+      s.score++;
+      s.streak++;
+      if (s.endless && s.score > climbSave.endlessBest) {
+        climbSave.endlessBest = s.score;
+        writeClimbSaveV43();
+      }
+      const mv = s.chess.move({ from: item.safe.from, to: item.safe.to, promotion: 'q' });
+      s.arrows = [{ from: item.safe.from, to: item.safe.to, color: 'green' }];
+      s.lastMove = mv ? { from: mv.from, to: mv.to } : null;
+      syncClimbBoardRender();
+      try { playChessSound('brilliant'); } catch (e) {}
+      flashBoardToastV43(s.streak >= 3 ? `🔥 x${s.streak} STREAK! SAFE MOVE!` : `✅ SAFE MOVE!`, '#81b64c', 1200);
+
+      if (fb) {
+        fb.style.borderColor = '#81b64c';
+        fb.innerHTML = `<b class="text-[#81b64c]">✅ Clean Dodge!</b> ${item.why}`;
+        fb.classList.remove('hidden');
+      }
+
+      addSessTimer(s, setTimeout(() => {
+        s.roundIdx++;
+        loadNextDodgerRoundV43(s._queueRef, s._poolRef);
+      }, 1350));
+    } else {
+      s.hearts--;
+      s.streak = 0;
+      try { playChessSound('wrong'); } catch (e) {}
+      flashBoardToastV43(choice === 'TIMEOUT' ? `⏰ TIME UP! -1 ❤️` : `☠️ BLUNDERED! WATCH THE TRAP...`, '#ef4444', 1800);
+
+      // Animate the blunder -> then opponent's brutal punishment right on the board!
+      const bMv = s.chess.move({ from: item.blunder.from, to: item.blunder.to, promotion: 'q' });
+      s.arrows = [{ from: item.blunder.from, to: item.blunder.to, color: 'red' }];
+      s.lastMove = bMv ? { from: bMv.from, to: bMv.to } : null;
+      syncClimbBoardRender();
+
+      if (fb) {
+        fb.style.borderColor = '#ef4444';
+        fb.innerHTML = `<b class="text-[#f26b68]">☠️ ${choice === 'TIMEOUT' ? 'Out of Time!' : 'You Walked Into It!'}</b> ${item.why}`;
+        fb.classList.remove('hidden');
+      }
+
+      addSessTimer(s, setTimeout(() => {
+        const pMv = s.chess.move({ from: item.punish.from, to: item.punish.to, promotion: 'q' });
+        s.arrows = [{ from: item.punish.from, to: item.punish.to, color: 'red', label: '!' }];
+        s.lastMove = pMv ? { from: pMv.from, to: pMv.to } : null;
+        syncClimbBoardRender();
+        try { playChessSound(pMv && pMv.captured ? 'capture' : 'check'); } catch (e) {}
+
+        addSessTimer(s, setTimeout(() => {
+          if (s.hearts <= 0) {
+            showClimbVictoryOrFailScreen(
+              false,
+              s.endless ? `Endless Run Over — Score: ${s.score}` : 'Out of Hearts!',
+              s.endless
+                ? `You dodged <b>${s.score}</b> blunders! Personal Best: <b>${climbSave.endlessBest}</b>.`
+                : `You cleared <b>${s.score}/${s.totalRounds}</b> rounds. Jump right back in and crush it!`,
+              null,
+              s.restartFn
+            );
+          } else {
+            s.roundIdx++;
+            loadNextDodgerRoundV43(s._queueRef, s._poolRef);
+          }
+        }, 1650));
+      }, 750));
+    }
+  }
+
+  // =========================================================================
+  // MODE B: 💀 CHECKMATE SNIPER (LV. 1 MATE-IN-1 & LV. 7 MATE-IN-2!)
+  // =========================================================================
+  function startCheckmateSniperV43(isM2, lvlNum) {
+    stopClimbSessionV43(false);
+    document.body.classList.add('v43-climb-live');
+    const deck = (isM2 ? SNIPER_M2_DECK : SNIPER_M1_DECK).slice();
+
+    const s = {
+      kind: 'sniper',
+      isM2,
+      lvlNum,
+      deck,
+      idx: 0,
+      hearts: 3,
+      streak: 0,
+      chess: new Chess(deck[0].fen),
+      playerColor: 'w',
+      flipped: false,
+      allowPieceInput: false,
+      busy: false,
+      selectedSq: null,
+      arrows: [],
+      lastMove: null,
+      timers: [],
+      stepInM2: 0,
+      restartFn: () => startCheckmateSniperV43(isM2, lvlNum)
+    };
+    v43Session = s;
+    syncClimbBoardRender();
+
+    renderActiveClimbCard(
+      `Lv. ${lvlNum} • Checkmate Sniper`,
+      `<div class="text-center py-8 text-xs text-[#9e9c99]">Get ready for rapid-fire checkmates!</div>`
+    );
+
+    runBoardCountdownV43(
+      isM2 ? '💀 MATE-IN-2 SNIPER' : '💀 MATE-IN-1 SNIPER',
+      isM2 ? 'Deliver the forcing check, then finish Checkmate in 2!' : 'Spot the instant Checkmate before time runs out!',
+      () => loadNextSniperShotV43()
+    );
+  }
+
+  function loadNextSniperShotV43() {
+    const s = v43Session;
+    if (!s || s.kind !== 'sniper') return;
+    stopClimbTimers(s);
+
+    if (s.idx >= s.deck.length) {
+      showClimbVictoryOrFailScreen(
+        true,
+        s.isM2 ? 'Mate-in-2 Sniper Mastered!' : 'Mate-in-1 Sniper Cleared!',
+        `You nailed all <b>${s.deck.length}</b> checkmate patterns! Your eyes are locking onto mating nets fast.`,
+        s.lvlNum,
+        s.restartFn
+      );
+      return;
+    }
+
+    const item = s.deck[s.idx];
+    s.chess = new Chess(item.fen);
+    s.selectedSq = null;
+    s.arrows = [];
+    s.lastMove = null;
+    s.stepInM2 = 0;
+    s.allowPieceInput = true;
+    s.busy = false;
+    syncClimbBoardRender();
+
+    const heartsStr = '❤️'.repeat(s.hearts) + '🖤'.repeat(Math.max(0, 3 - s.hearts));
+    const secLimit = s.isM2 ? 22 : 12;
+    const totalMs = secLimit * 1000;
+    const startTs = Date.now();
+
+    renderActiveClimbCard(
+      `Lv. ${s.lvlNum} • Checkmate Sniper`,
+      `
+        <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2">
+          <div class="flex items-center justify-between text-xs font-bold">
+            <span class="text-[#9ad165]">Shot ${s.idx + 1}/${s.deck.length}</span>
+            <span>${heartsStr}</span>
+          </div>
+          <div class="text-sm font-extrabold text-white">${item.title}</div>
+          <div class="text-xs text-[#c7c5c0]">White to move — find <b>${s.isM2 ? 'Checkmate in 2' : 'Checkmate in 1'}</b> on the board!</div>
+          <div id="v43SniperHintBox" class="hidden p-2 rounded-lg bg-[#161512] border-l-2 border-[#f7c045] text-xs text-[#e8e6e2]">💡 ${item.hint}</div>
+        </div>
+      `
+    );
+
+    const tId = setInterval(() => {
+      if (!v43Session || v43Session !== s || s.busy) return;
+      const rem = Math.max(0, totalMs - (Date.now() - startTs));
+      const pct = (rem / totalMs) * 100;
+      const isLow = rem <= 3500;
+      setOnScreenHudV43({
+        mode: isLow ? 'danger' : 'normal',
+        left: `💀 ${s.isM2 ? 'MATE IN 2' : 'MATE IN 1'} • Shot ${s.idx + 1}/${s.deck.length}`,
+        right: `<span>${heartsStr}</span><span style="color:${isLow ? '#fca5a5' : '#81b64c'};">${(rem / 1000).toFixed(1)}s</span>`,
+        pct,
+        barColor: isLow ? '#ef4444' : (pct < 50 ? '#f7c045' : '#81b64c')
+      });
+      if (rem <= 0) {
+        clearInterval(tId);
+        s.hearts--;
+        try { playChessSound('wrong'); } catch (e) {}
+        if (s.hearts <= 0) {
+          showClimbVictoryOrFailScreen(false, 'Time Ran Out!', `You cleared ${s.idx}/${s.deck.length} shots. Try again!`, null, s.restartFn);
+        } else {
+          flashBoardToastV43('⏰ Time Up! Try this shot again (-1 ❤️)', '#ef4444', 1500);
+          document.getElementById('v43SniperHintBox')?.classList.remove('hidden');
+          addSessTimer(s, setTimeout(loadNextSniperShotV43, 1200));
+        }
+      }
+    }, 70);
+    addSessTimer(s, tId, true);
+
+    s.onMove = (fromSq, toSq) => {
+      const sim = new Chess(s.chess.fen());
+      const mv = sim.move({ from: fromSq, to: toSq, promotion: 'q' });
+      if (!mv) return;
+
+      if (!s.isM2) {
+        if (sim.in_checkmate()) {
+          s.busy = true;
+          stopClimbTimers(s);
+          s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+          s.lastMove = { from: fromSq, to: toSq };
+          s.arrows = [{ from: fromSq, to: toSq, color: 'green' }];
+          s.streak++;
+          syncClimbBoardRender();
+          try { playChessSound('brilliant'); } catch (e) {}
+          flashBoardToastV43(`👑 CHECKMATE! (${mv.san})`, '#81b64c', 1100);
+          addSessTimer(s, setTimeout(() => { s.idx++; loadNextSniperShotV43(); }, 1050));
+        } else {
+          try { playChessSound('wrong'); } catch (e) {}
+          flashBoardToastV43(`❌ Not Checkmate! Look for the kill shot!`, '#ef4444', 1100);
+          document.getElementById('v43SniperHintBox')?.classList.remove('hidden');
+        }
+      } else {
+        // Mate-in-2 flow
+        if (s.stepInM2 === 0) {
+          const okFirst = (fromSq === item.m1[0] && toSq === item.m1[1]);
+          if (okFirst) {
+            s.busy = true;
+            s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+            s.lastMove = { from: fromSq, to: toSq };
+            syncClimbBoardRender();
+            try { playChessSound('check'); } catch (e) {}
+            flashBoardToastV43(`⚡ Great first move (${mv.san})! Finish it!`, '#32b8e6', 1000);
+            addSessTimer(s, setTimeout(() => {
+              const rep = s.chess.move({ from: item.reply[0], to: item.reply[1], promotion: 'q' }) || s.chess.moves({ verbose: true })[0];
+              if (rep) s.lastMove = { from: rep.from, to: rep.to };
+              s.stepInM2 = 1;
+              s.busy = false;
+              syncClimbBoardRender();
+              try { playChessSound(rep && rep.captured ? 'capture' : 'move'); } catch (e) {}
+            }, 620));
+          } else {
+            try { playChessSound('wrong'); } catch (e) {}
+            flashBoardToastV43('❌ Not the forcing Mate-in-2 move!', '#ef4444', 1100);
+            document.getElementById('v43SniperHintBox')?.classList.remove('hidden');
+          }
+        } else {
+          if (sim.in_checkmate()) {
+            s.busy = true;
+            stopClimbTimers(s);
+            s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+            s.lastMove = { from: fromSq, to: toSq };
+            s.arrows = [{ from: fromSq, to: toSq, color: 'green' }];
+            syncClimbBoardRender();
+            try { playChessSound('brilliant'); } catch (e) {}
+            flashBoardToastV43(`👑 KNOCKOUT! (${mv.san})`, '#81b64c', 1200);
+            addSessTimer(s, setTimeout(() => { s.idx++; loadNextSniperShotV43(); }, 1100));
+          } else {
+            try { playChessSound('wrong'); } catch (e) {}
+            flashBoardToastV43('❌ Almost! Deliver Checkmate on this move!', '#ef4444', 1100);
+          }
+        }
+      }
+    };
+  }
+
+  // =========================================================================
+  // MODE C: 🔍 CRIME SCENE (LV. 4 — WATCH CLIP -> PICK BLUNDER -> PUNISH IT!)
+  // =========================================================================
+  function startCrimeSceneV43(lvlNum) {
+    stopClimbSessionV43(false);
+    document.body.classList.add('v43-climb-live');
+
+    const s = {
+      kind: 'crime',
+      lvlNum,
+      idx: 0,
+      phase: 'watch', // 'watch' | 'pick' | 'punish'
+      chess: new Chess(CRIME_SCENE_DECK[0].startFen),
+      playerColor: 'w',
+      flipped: false,
+      allowPieceInput: false,
+      busy: false,
+      selectedSq: null,
+      arrows: [],
+      lastMove: null,
+      timers: [],
+      restartFn: () => startCrimeSceneV43(lvlNum)
+    };
+    v43Session = s;
+    loadCrimeCaseV43();
+  }
+
+  function loadCrimeCaseV43() {
+    const s = v43Session;
+    if (!s || s.kind !== 'crime') return;
+    stopClimbTimers(s);
+
+    if (s.idx >= CRIME_SCENE_DECK.length) {
+      showClimbVictoryOrFailScreen(
+        true,
+        'Crime Scene Cleared!',
+        'You spotted and punished every single blunder! Your tactical radar is leveling up.',
+        s.lvlNum,
+        s.restartFn
+      );
+      return;
+    }
+
+    const cs = CRIME_SCENE_DECK[s.idx];
+    s.phase = 'watch';
+    s.allowPieceInput = false;
+    s.arrows = [];
+    s.lastMove = null;
+    s.chess = new Chess(cs.startFen);
+    syncClimbBoardRender();
+
+    setOnScreenHudV43({
+      left: `🔍 CRIME SCENE • Case ${s.idx + 1}/${CRIME_SCENE_DECK.length}`,
+      right: `<span class="text-[#f7c045]">WATCH CLIP</span>`,
+      sub: 'Watch the 2 moves closely—which one is the blunder?'
+    });
+
+    renderActiveClimbCard(
+      `Lv. ${s.lvlNum} • Crime Scene`,
+      `<div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+        <div class="text-sm font-extrabold text-white">${cs.title}</div>
+        <div id="v43CrimePrompt" class="text-xs text-[#c7c5c0]">👀 Playing the crime scene clip on the board...</div>
+        <div id="v43CrimeBtns" class="hidden space-y-2 pt-1"></div>
+        <div id="v43CrimeFb" class="hidden p-2.5 rounded-lg bg-[#161512] text-xs"></div>
+      </div>`
+    );
+
+    // Animate the clip move-by-move on the board!
+    let cPtr = 0;
+    const playClipStep = () => {
+      if (!v43Session || v43Session !== s) return;
+      if (cPtr < cs.clip.length) {
+        const cm = cs.clip[cPtr];
+        s.chess.move({ from: cm.from, to: cm.to, promotion: 'q' });
+        s.lastMove = { from: cm.from, to: cm.to };
+        s.arrows = [{ from: cm.from, to: cm.to, color: cPtr === 0 ? 'blue' : 'purple' }];
+        syncClimbBoardRender();
+        try { playChessSound('move'); } catch (e) {}
+        cPtr++;
+        addSessTimer(s, setTimeout(playClipStep, 950));
+      } else {
+        s.phase = 'pick';
+        setOnScreenHudV43({
+          left: `🔍 CASE ${s.idx + 1}/${CRIME_SCENE_DECK.length} • STEP 1`,
+          right: `<span class="text-[#32b8e6]">PICK THE BLUNDER</span>`,
+          sub: 'Click the move that ruined the game!'
+        });
+        const pr = document.getElementById('v43CrimePrompt');
+        if (pr) pr.textContent = 'Step 1: Which move was the huge blunder?';
+        const btnWrap = document.getElementById('v43CrimeBtns');
+        if (btnWrap) {
+          btnWrap.classList.remove('hidden');
+          btnWrap.innerHTML = cs.clip.map((cm, ci) => `
+            <button type="button" data-cidx="${ci}" class="w-full py-2.5 px-3 rounded-xl bg-[#2b2926] hover:bg-[#3a3834] border border-white/15 text-white font-bold text-xs text-left flex justify-between transition">
+              <span>Move ${ci + 1}: ${cm.who} played <b>${cm.san}</b></span>
+              <span class="text-[#f7c045]">Blunder? →</span>
+            </button>
+          `).join('');
+          btnWrap.querySelectorAll('button[data-cidx]').forEach(b => {
+            b.addEventListener('click', () => {
+              const picked = parseInt(b.dataset.cidx, 10);
+              if (picked === cs.blunderIdx) {
+                try { playChessSound('levelup'); } catch (e) {}
+                s.phase = 'punish';
+                s.allowPieceInput = true;
+                s.arrows = [];
+                syncClimbBoardRender();
+                btnWrap.classList.add('hidden');
+                if (pr) pr.innerHTML = `<b class="text-[#81b64c]">✅ Caught it!</b> Now play the <b>winning punishment move</b> on the board!`;
+                setOnScreenHudV43({
+                  left: `🔍 CASE ${s.idx + 1}/${CRIME_SCENE_DECK.length} • STEP 2`,
+                  right: `<span class="text-[#81b64c]">PUNISH IT!</span>`,
+                  sub: 'Make the winning punishment move right on the board!'
+                });
+                flashBoardToastV43('✅ Caught the blunder! Now punish it!', '#81b64c', 1400);
+              } else {
+                try { playChessSound('wrong'); } catch (e) {}
+                flashBoardToastV43('❌ That move was fine—check the other move!', '#ef4444', 1200);
+              }
+            });
+          });
+        }
+      }
+    };
+    addSessTimer(s, setTimeout(playClipStep, 750));
+
+    s.onMove = (fromSq, toSq) => {
+      if (s.phase !== 'punish') return;
+      if (fromSq === cs.punish.from && toSq === cs.punish.to) {
+        s.allowPieceInput = false;
+        const mv = s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+        s.lastMove = { from: fromSq, to: toSq };
+        s.arrows = [{ from: fromSq, to: toSq, color: 'green' }];
+        syncClimbBoardRender();
+        try { playChessSound('brilliant'); } catch (e) {}
+        flashBoardToastV43(`💥 PUNISHED! (${mv.san})`, '#81b64c', 1500);
+        const fb = document.getElementById('v43CrimeFb');
+        if (fb) {
+          fb.innerHTML = `<b class="text-[#81b64c]">✅ Case Closed!</b> ${cs.explain}`;
+          fb.classList.remove('hidden');
+        }
+        addSessTimer(s, setTimeout(() => { s.idx++; loadCrimeCaseV43(); }, 1850));
+      } else {
+        try { playChessSound('wrong'); } catch (e) {}
+        flashBoardToastV43('❌ Missed the punishment—look for Check, Fork, or Free Queen!', '#ef4444', 1300);
+      }
+    };
+  }
+
+  // =========================================================================
+  // MODE D: 🌲 OPENING SURVIVAL (LV. 6 — 1.e4 vs 5 DEFENSES, 0 ARROWS, 3 HEARTS)
+  // =========================================================================
+  function startOpeningSurvivalV43(lvlNum) {
+    stopClimbSessionV43(false);
+    document.body.classList.add('v43-climb-live');
+
+    const branches = OPENING_SURVIVAL_E4.slice().sort(() => Math.random() - 0.5);
+    const s = {
+      kind: 'opening',
+      lvlNum,
+      branches,
+      bIdx: 0,
+      stepIdx: 0,
+      hearts: 3,
+      chess: new Chess(STD_FEN),
+      playerColor: 'w',
+      flipped: false,
+      allowPieceInput: true,
+      busy: false,
+      selectedSq: null,
+      arrows: [],
+      lastMove: null,
+      timers: [],
+      restartFn: () => startOpeningSurvivalV43(lvlNum)
+    };
+    v43Session = s;
+    loadOpeningBranchV43();
+  }
+
+  function loadOpeningBranchV43() {
+    const s = v43Session;
+    if (!s || s.kind !== 'opening') return;
+    stopClimbTimers(s);
+
+    if (s.bIdx >= s.branches.length) {
+      showClimbVictoryOrFailScreen(
+        true,
+        '1.e4 Opening Survival Cleared!',
+        'You survived all <b>5 major Black defenses</b> (`e5`, Sicilian, French, Caro-Kann, Scandinavian) with ZERO arrows!',
+        s.lvlNum,
+        s.restartFn
+      );
+      return;
+    }
+
+    const br = s.branches[s.bIdx];
+    s.stepIdx = 0;
+    s.chess = new Chess(STD_FEN);
+    s.selectedSq = null;
+    s.arrows = [];
+    s.lastMove = null;
+    s.allowPieceInput = true;
+    s.busy = false;
+    syncClimbBoardRender();
+
+    const refreshOpeningUi = () => {
+      const curSt = br.steps[s.stepIdx];
+      const heartsStr = '❤️'.repeat(s.hearts) + '🖤'.repeat(Math.max(0, 3 - s.hearts));
+      setOnScreenHudV43({
+        left: `🌲 WAVE ${s.bIdx + 1}/${s.branches.length} • ${br.name}`,
+        right: `<span>${heartsStr}</span><span class="text-[#81b64c]">Move ${s.stepIdx + 1}/${br.steps.length}</span>`,
+        sub: curSt ? curSt.cue : 'Wave Complete!',
+        pct: (s.stepIdx / br.steps.length) * 100,
+        barColor: '#81b64c'
+      });
+
+      renderActiveClimbCard(
+        `Lv. ${s.lvlNum} • 1.e4 Survival`,
+        `
+          <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span class="text-[#9ad165]">Wave ${s.bIdx + 1} of ${s.branches.length}</span>
+              <span>${heartsStr}</span>
+            </div>
+            <div class="text-sm font-extrabold text-white">${br.name}</div>
+            <div class="p-2.5 rounded-lg bg-[#161512] border-l-2 border-[#32b8e6] text-xs text-[#e2e0dc]">
+              🎯 <b>Goal:</b> ${curSt ? curSt.cue : 'Done!'}
+            </div>
+            <div class="text-[11px] text-[#9e9c99]">No arrows allowed—play the move from memory!</div>
+          </div>
+        `
+      );
+    };
+
+    refreshOpeningUi();
+
+    s.onMove = (fromSq, toSq) => {
+      const curSt = br.steps[s.stepIdx];
+      if (!curSt) return;
+      const sim = new Chess(s.chess.fen());
+      const mv = sim.move({ from: fromSq, to: toSq, promotion: 'q' });
+      if (!mv) return;
+
+      if (curSt.accept.includes(mv.san)) {
+        s.busy = true;
+        s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+        s.lastMove = { from: fromSq, to: toSq };
+        s.arrows = [];
+        syncClimbBoardRender();
+        try { playChessSound(mv.captured ? 'capture' : 'move'); } catch (e) {}
+
+        if (curSt.bot) {
+          addSessTimer(s, setTimeout(() => {
+            const bm = s.chess.move(curSt.bot);
+            if (bm) s.lastMove = { from: bm.from, to: bm.to };
+            s.stepIdx++;
+            s.busy = false;
+            syncClimbBoardRender();
+            try { playChessSound(bm && bm.captured ? 'capture' : 'move'); } catch (e) {}
+            refreshOpeningUi();
+          }, 520));
+        } else {
+          flashBoardToastV43(`✅ ${br.name} Cleared!`, '#81b64c', 1200);
+          try { playChessSound('levelup'); } catch (e) {}
+          addSessTimer(s, setTimeout(() => { s.bIdx++; loadOpeningBranchV43(); }, 1100));
+        }
+      } else {
+        s.hearts--;
+        try { playChessSound('wrong'); } catch (e) {}
+        // Flash the correct move briefly so it sticks!
+        const hintSim = new Chess(s.chess.fen());
+        const hm = hintSim.move(curSt.accept[0]);
+        if (hm) {
+          s.arrows = [{ from: hm.from, to: hm.to, color: 'green' }];
+          renderClimbBoardGraphics();
+        }
+        if (s.hearts <= 0) {
+          showClimbVictoryOrFailScreen(
+            false,
+            'Out of Hearts!',
+            `You missed <b>${curSt.accept[0]}</b> in the <b>${br.name}</b>. Now that you saw it, run it back!`,
+            null,
+            s.restartFn
+          );
+        } else {
+          flashBoardToastV43(`❌ Try ${curSt.accept[0]}! (-1 ❤️)`, '#ef4444', 1500);
+          refreshOpeningUi();
+        }
+      }
+    };
+  }
+
+  // =========================================================================
+  // MODE E: 🔪 FINISH HIM! (LV. 3 & LV. 9) & 👑 BOSS FIGHTS (LV. 5 & LV. 10)
+  //         WITH ON-SCREEN 🧊 FREEZE-FRAME LOCKOUT BAR!
+  // =========================================================================
+  function startPlayableMatchLevelV43(cfg) {
+    // cfg: { lvlNum, title, stages:[{name,fen,tip,botElo}], freezeSec, isBoss }
+    stopClimbSessionV43(false);
+    document.body.classList.add('v43-climb-live');
+
+    const s = {
+      kind: 'match',
+      cfg,
+      stageIdx: 0,
+      chess: new Chess(cfg.stages[0].fen),
+      playerColor: 'w',
+      flipped: false,
+      allowPieceInput: false,
+      frozen: false,
+      busy: false,
+      selectedSq: null,
+      arrows: [],
+      lastMove: null,
+      moveCount: 0,
+      botReqId: 0,
+      timers: [],
+      restartFn: () => startPlayableMatchLevelV43(cfg)
+    };
+    v43Session = s;
+    loadMatchStageV43();
+  }
+
+  function loadMatchStageV43() {
+    const s = v43Session;
+    if (!s || s.kind !== 'match') return;
+    stopClimbTimers(s);
+
+    const cfg = s.cfg;
+    if (s.stageIdx >= cfg.stages.length) {
+      showClimbVictoryOrFailScreen(
+        true,
+        cfg.isBoss ? `👑 ${cfg.title} DEFEATED!` : `${cfg.title} Cleared!`,
+        cfg.isBoss
+          ? `You defeated the <b>${cfg.stages[0].botElo} ELO Boss</b> with <b>0 Undos</b> and <b>${cfg.freezeSec}s Freeze-Frame</b> discipline!`
+          : `You converted every winning endgame cleanly without hints or undos!`,
+        cfg.lvlNum,
+        s.restartFn
+      );
+      return;
+    }
+
+    const stg = cfg.stages[s.stageIdx];
+    s.chess = new Chess(stg.fen);
+    s.selectedSq = null;
+    s.arrows = [];
+    s.lastMove = null;
+    s.moveCount = 0;
+    s.frozen = false;
+    s.busy = false;
+    s.allowPieceInput = false;
+    syncClimbBoardRender();
+
+    const updateSidebarCard = (statusTxt) => {
+      renderActiveClimbCard(
+        `Lv. ${cfg.lvlNum} • ${cfg.title}`,
+        `
+          <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span class="text-[#f7c045]">${cfg.isBoss ? `👑 ${stg.botElo} ELO Boss` : `Stage ${s.stageIdx + 1}/${cfg.stages.length}`}</span>
+              <span class="text-[#9e9c99]">0 Undos</span>
+            </div>
+            <div class="text-sm font-extrabold text-white">${stg.name}</div>
+            <div class="p-2.5 rounded-lg bg-[#161512] border-l-2 border-[#81b64c] text-xs text-[#e2e0dc]">💡 ${stg.tip}</div>
+            ${cfg.freezeSec ? `<div class="p-2 rounded-lg bg-[#13222b] border border-[#38bdf8]/40 text-[11px] text-[#9ae5ff]">🧊 <b>${cfg.freezeSec}s Freeze-Frame ON:</b> After every Boss move, the board locks so you can right-click drag arrows &amp; scan for danger!</div>` : ''}
+            <div id="v43MatchStatusTxt" class="text-xs font-bold text-[#81b64c]">${statusTxt}</div>
+          </div>
+        `
+      );
+    };
+
+    const startFreezeLockout = (sec) => {
+      if (!sec || sec <= 0 || !v43Session || v43Session !== s) {
+        s.frozen = false;
+        s.allowPieceInput = true;
+        setOnScreenHudV43({
+          left: cfg.isBoss ? `👑 BOSS (${stg.botElo} ELO)` : `🔪 ${stg.name}`,
+          right: `<span class="text-[#81b64c]">⚡ YOUR TURN</span>`,
+          sub: 'Right-click drag arrows to plan your moves!'
+        });
+        return;
+      }
+
+      s.frozen = true;
+      s.allowPieceInput = false;
+      const totalMs = sec * 1000;
+      const t0 = Date.now();
+      const ft = setInterval(() => {
+        if (!v43Session || v43Session !== s) { clearInterval(ft); return; }
+        const rem = Math.max(0, totalMs - (Date.now() - t0));
+        const pct = (rem / totalMs) * 100;
+        setOnScreenHudV43({
+          mode: 'freeze',
+          left: `🧊 FREEZE-FRAME • ANALYZE THE BOARD`,
+          right: `<span class="text-[#38bdf8]">${(rem / 1000).toFixed(1)}s</span>`,
+          sub: 'Scan opponent threats — Right-click drag arrows to plan!',
+          pct,
+          barColor: '#38bdf8'
+        });
+        if (rem <= 0) {
+          clearInterval(ft);
+          s.frozen = false;
+          s.allowPieceInput = true;
+          try { playChessSound('move'); } catch (e) {}
+          flashBoardToastV43('⚡ BOARD UNLOCKED — YOUR MOVE!', '#81b64c', 900);
+          setOnScreenHudV43({
+            left: `👑 BOSS (${stg.botElo} ELO)`,
+            right: `<span class="text-[#81b64c]">⚡ YOUR TURN</span>`,
+            sub: 'Make your move!'
+          });
+        }
+      }, 60);
+      addSessTimer(s, ft, true);
+    };
+
+    const checkMatchEnd = () => {
+      if (!s.chess.game_over()) return false;
+      s.allowPieceInput = false;
+      s.busy = true;
+      if (s.chess.in_checkmate()) {
+        const whiteWon = (s.chess.turn() === 'b');
+        if (whiteWon) {
+          try { playChessSound('levelup'); } catch (e) {}
+          flashBoardToastV43('👑 CHECKMATE! YOU WIN!', '#81b64c', 1500);
+          addSessTimer(s, setTimeout(() => { s.stageIdx++; loadMatchStageV43(); }, 1350));
+        } else {
+          showClimbVictoryOrFailScreen(false, 'Checkmated by the Boss!', 'Take a breath, use the Freeze-Frame timer to check for danger, and run it back!', null, s.restartFn);
+        }
+      } else {
+        const why = s.chess.in_stalemate() ? 'Stalemate! Watch out for leaving their King with zero legal squares.' : 'Match Drawn — you need a Checkmate win to clear this level!';
+        showClimbVictoryOrFailScreen(false, 'Draw — Try Again!', why, null, s.restartFn);
+      }
+      return true;
+    };
+
+    const requestBossReply = () => {
+      s.busy = true;
+      s.allowPieceInput = false;
+      setOnScreenHudV43({
+        left: cfg.isBoss ? `👑 BOSS (${stg.botElo} ELO)` : `🔪 ${stg.name}`,
+        right: `<span class="text-[#f7c045]">Thinking...</span>`
+      });
+
+      const rid = ++s.botReqId;
+      const applyBotMv = (mvSpec) => {
+        if (!v43Session || v43Session !== s || rid !== s.botReqId) return;
+        let exec = null;
+        if (mvSpec) exec = s.chess.move({ from: mvSpec.from, to: mvSpec.to, promotion: mvSpec.promotion || 'q' });
+        if (!exec) {
+          const legs = s.chess.moves({ verbose: true });
+          if (legs.length) exec = s.chess.move(legs[0]);
+        }
+        if (exec) s.lastMove = { from: exec.from, to: exec.to };
+        s.busy = false;
+        syncClimbBoardRender();
+        try { playChessSound(s.chess.in_check() ? 'check' : (exec && exec.captured ? 'capture' : 'move')); } catch (e) {}
+        if (checkMatchEnd()) return;
+        startFreezeLockout(cfg.freezeSec || 0);
+      };
+
+      if (v43BotWorker) {
+        v43BotWorker.onmessage = (ev) => {
+          if (!ev.data || ev.data.reqId !== rid) return;
+          addSessTimer(s, setTimeout(() => applyBotMv(ev.data.move), 280));
+        };
+        v43BotWorker.postMessage({ type: 'BOT', reqId: rid, fen: s.chess.fen(), elo: stg.botElo });
+      } else {
+        addSessTimer(s, setTimeout(() => applyBotMv(null), 400));
+      }
+    };
+
+    s.onMove = (fromSq, toSq) => {
+      if (s.frozen || s.busy) return;
+      const mv = s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+      if (!mv) return;
+      s.lastMove = { from: mv.from, to: mv.to };
+      s.moveCount++;
+      clearRightClickLayer();
+      syncClimbBoardRender();
+      try { playChessSound(s.chess.in_check() ? 'check' : (mv.captured ? 'capture' : 'move')); } catch (e) {}
+      if (checkMatchEnd()) return;
+      requestBossReply();
+    };
+
+    updateSidebarCard('Get ready...');
+    runBoardCountdownV43(
+      cfg.isBoss ? `👑 ${stg.botElo} ELO BOSS FIGHT` : `🔪 ${stg.name.toUpperCase()}`,
+      cfg.freezeSec ? `${cfg.freezeSec}s Freeze-Frame active • Right-click drag arrows while locked!` : stg.tip,
+      () => {
+        updateSidebarCard('Your turn — White to move!');
+        startFreezeLockout(0); // Move 1 starts unlocked; Freeze-Frame kicks in after every Boss reply!
+      }
+    );
+  }
+
+  function startLevelByNumberV43(lvlNum) {
+    if (lvlNum === 1) startCheckmateSniperV43(false, 1);
+    else if (lvlNum === 2) startBlunderDodgerV43({ endless: false, tier: 1, totalRounds: 8, timeSec: 10, lvlNum: 2, title: 'Lv. 2 • Blunder Dodger' });
+    else if (lvlNum === 3) startPlayableMatchLevelV43({ lvlNum: 3, title: 'Finish Him!', stages: FINISH_HIM_LV3, freezeSec: 0, isBoss: false });
+    else if (lvlNum === 4) startCrimeSceneV43(4);
+    else if (lvlNum === 5) startPlayableMatchLevelV43({ lvlNum: 5, title: '600 Boss Fight', stages: [{ name: 'Street Arena Boss (600 ELO)', fen: STD_FEN, tip: 'Use the 3s Freeze-Frame to scan for free pieces before every move!', botElo: 600 }], freezeSec: 3, isBoss: true });
+    else if (lvlNum === 6) startOpeningSurvivalV43(6);
+    else if (lvlNum === 7) startCheckmateSniperV43(true, 7);
+    else if (lvlNum === 8) startBlunderDodgerV43({ endless: false, tier: 2, totalRounds: 8, timeSec: 9, lvlNum: 8, title: 'Lv. 8 • Blunder Dodger II' });
+    else if (lvlNum === 9) startPlayableMatchLevelV43({ lvlNum: 9, title: 'Finish Him! II', stages: FINISH_HIM_LV9, freezeSec: 0, isBoss: false });
+    else if (lvlNum === 10) startPlayableMatchLevelV43({ lvlNum: 10, title: '1000 Club Boss', stages: [{ name: 'Club Circuit Boss (1000 ELO)', fen: STD_FEN, tip: 'Use the 5s Freeze-Frame + Right-Click Arrows to spot tactics before moving!', botElo: 1000 }], freezeSec: 5, isBoss: true });
+  }
+
+  // -------------------------------------------------------------------------
+  // 9. MOUNT "⚔️ CLIMB" TAB & RENDER THE 25-LEVEL ROADMAP
+  // -------------------------------------------------------------------------
+  function renderClimbSidebarMapV43() {
+    const container = document.getElementById('tabContentClimb');
+    if (!container) return;
+
+    const doneCnt = climbSave.completed.length;
+    const pct = Math.round((doneCnt / 25) * 100);
+
+    let html = `
+      <!-- Standalone Endless ⚡ Blunder Dodger Arcade Card -->
+      <div class="v43-endless-hero space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="px-2 py-0.5 rounded-full bg-[#a855f7]/30 text-[#e9d5ff] text-[9.5px] font-extrabold uppercase tracking-wider">ARCADE MODE</span>
+          <span class="text-[11px] font-extrabold text-[#f7c045]">🏆 Best: ${climbSave.endlessBest}</span>
+        </div>
+        <div class="text-sm font-extrabold text-white">⚡ Endless Blunder Dodger</div>
+        <div class="text-[11px] text-[#d6d4d0] leading-snug">Two arrows. One safe move, one sneaky blunder. 3 Hearts &amp; faster clock every 5 dodges!</div>
+        <button id="v43StartEndlessDodgerBtn" type="button" class="w-full py-2 rounded-xl bg-gradient-to-r from-[#a855f7] to-[#32b8e6] hover:brightness-110 text-white font-extrabold text-xs shadow transition">
+          ▶ Play Endless Blunder Dodger
+        </button>
+      </div>
+
+      <!-- Campaign Roadmap Progress Header -->
+      <div class="rounded-xl p-2.5 bg-[#1a1916] border border-white/10 mb-1">
+        <div class="flex items-center justify-between text-[11px] font-bold mb-1.5">
+          <span class="text-white">⚔️ Pro Climb Roadmap</span>
+          <span class="text-[#81b64c]">${doneCnt}/25 Cleared (${pct}%)</span>
+        </div>
+        <div class="w-full h-1.5 rounded-full bg-black/40 overflow-hidden">
+          <div class="h-full bg-[#81b64c] rounded-full transition-all" style="width:${pct}%"></div>
+        </div>
+      </div>
+    `;
+
+    ROADMAP_TIERS.forEach(t => {
+      html += `
+        <div class="v43-tier-header">
+          <span>${t.title}</span>
+          <span class="text-[#9e9c99] text-[10px]">${t.eloRange}</span>
+        </div>
+      `;
+      t.levels.forEach(lv => {
+        const cleared = isLevelCompleted(lv.num);
+        const unlocked = !lv.soon && isLevelUnlocked(lv.num);
+        const cls = [
+          'v43-level-card',
+          cleared ? 'cleared' : '',
+          lv.isBoss ? 'boss-card' : '',
+          !unlocked ? 'locked' : ''
+        ].filter(Boolean).join(' ');
+
+        const rightBadge = lv.soon
+          ? `<span class="text-[10px] font-bold text-[#7c7a76]">V44</span>`
+          : (cleared
+              ? `<span class="text-xs font-extrabold text-[#81b64c]">✓</span>`
+              : (unlocked
+                  ? `<span class="px-2 py-0.5 rounded-md bg-[#81b64c] text-white text-[10px] font-extrabold">Play</span>`
+                  : `<span class="text-xs">🔒</span>`));
+
+        html += `
+          <div class="${cls}" ${unlocked ? `data-v43-lvl="${lv.num}"` : ''}>
+            <div class="v43-lvl-badge">${lv.icon}</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-extrabold text-white truncate">Lv. ${lv.num} • ${lv.mode}</div>
+              <div class="text-[10.5px] text-[#a8a6a1] truncate">${lv.sub}</div>
+            </div>
+            <div class="flex-shrink-0">${rightBadge}</div>
+          </div>
+        `;
+      });
+    });
+
+    html += `
+      <div class="pt-2 pb-4 flex items-center justify-between text-[10.5px] text-[#9e9c99]">
+        <span>💡 Right-click + drag draws arrows anywhere!</span>
+        <button id="v43ToggleFreePlayBtn" type="button" class="underline hover:text-white font-bold">
+          ${climbSave.freePlayUnlock ? '🔒 Lock Order' : '🔓 Unlock 1–10'}
+        </button>
+      </div>
+    `;
+
+    container.innerHTML = html;
+
+    container.querySelector('#v43StartEndlessDodgerBtn')?.addEventListener('click', () => {
+      startBlunderDodgerV43({ endless: true, timeSec: 10, title: '⚡ Endless Blunder Dodger' });
+    });
+
+    container.querySelectorAll('[data-v43-lvl]').forEach(card => {
+      card.addEventListener('click', () => {
+        startLevelByNumberV43(parseInt(card.dataset.v43Lvl, 10));
+      });
+    });
+
+    container.querySelector('#v43ToggleFreePlayBtn')?.addEventListener('click', () => {
+      climbSave.freePlayUnlock = !climbSave.freePlayUnlock;
+      writeClimbSaveV43();
+      renderClimbSidebarMapV43();
+    });
+  }
+
+  // Mount the "⚔️ Climb" tab button into the top sidebar tab bar cleanly
+  (function mountClimbTabV43() {
+    const tabBar = document.querySelector('.sidebar-tab')?.parentElement;
+    const tabCoach = document.getElementById('tabContentCoach');
+    const bodyParent = tabCoach ? tabCoach.parentElement : null;
+    if (!tabBar || !bodyParent) return;
+
+    if (!document.getElementById('v43ClimbTabBtn')) {
+      tabBar.classList.remove('grid-cols-4', 'grid-cols-5');
+      tabBar.classList.add('grid-cols-6');
+      tabBar.querySelectorAll('.sidebar-tab').forEach(b => {
+        b.style.fontSize = '10px';
+        b.style.paddingLeft = '2px';
+        b.style.paddingRight = '2px';
+      });
+
+      const btn = document.createElement('button');
+      btn.id = 'v43ClimbTabBtn';
+      btn.dataset.tab = 'climb';
+      btn.className = 'sidebar-tab py-2 px-1 rounded-lg font-bold text-[10px] text-[#9e9c99] hover:text-white transition flex items-center justify-center gap-0.5';
+      btn.innerHTML = '<span>⚔️</span><span>Climb</span>';
+      // Insert right next to Play tab!
+      const firstTab = tabBar.firstElementChild;
+      if (firstTab && firstTab.nextSibling) tabBar.insertBefore(btn, firstTab.nextSibling);
+      else tabBar.appendChild(btn);
+
+      btn.addEventListener('click', () => window.activateSidebarTab('climb'));
+    }
+
+    if (!document.getElementById('tabContentClimb')) {
+      const panel = document.createElement('div');
+      panel.id = 'tabContentClimb';
+      panel.className = 'hidden';
+      bodyParent.insertBefore(panel, tabCoach.nextSibling);
+    }
+
+    // Wrap activateSidebarTab cleanly
+    const prevActV43 = window.activateSidebarTab;
+    window.activateSidebarTab = function(tabName) {
+      // Respect Online 1v1 anti-leave lock!
+      if (window._isOnlineMatch && !window._twoPlayerMatchEnded && tabName !== 'coach') {
+        if (prevActV43) prevActV43(tabName);
+        return;
+      }
+
+      const climbPanel = document.getElementById('tabContentClimb');
+      if (tabName === 'climb') {
+        document.getElementById('hoverHudCloseBtn')?.click();
+        document.getElementById('v9TransitionOverlay')?.classList.add('hidden');
+        document.querySelectorAll('.sidebar-tab').forEach(b => {
+          const on = b.dataset.tab === 'climb';
+          b.classList.toggle('bg-[#363431]', on);
+          b.classList.toggle('text-white', on);
+          b.classList.toggle('shadow-sm', on);
+          b.classList.toggle('text-[#9e9c99]', !on);
+        });
+        ['tabContentCoach', 'tabContentLessons', 'tabContentReview', 'tabContentEditor', 'tabContentHistory'].forEach(id => {
+          document.getElementById(id)?.classList.add('hidden');
+        });
+        if (climbPanel) climbPanel.classList.remove('hidden');
+        if (!v43Session) renderClimbSidebarMapV43();
+        return;
+      }
+
+      // Leaving Climb tab -> cleanly restore main board!
+      if (v43Session) stopClimbSessionV43(false);
+      if (climbPanel) climbPanel.classList.add('hidden');
+      if (prevActV43) prevActV43(tabName);
+    };
+
+    // Keep SVG layers aligned on window resize or board flip
+    const prevRenderV43 = window.renderBoard;
+    window.renderBoard = function() {
+      prevRenderV43();
+      if (v43Session) renderClimbBoardGraphics();
+      if (rcArrows.size > 0 || rcCircles.size > 0) renderRightClickLayer();
+    };
+    window.addEventListener('resize', () => {
+      if (v43Session) renderClimbBoardGraphics();
+      if (rcArrows.size > 0 || rcCircles.size > 0) renderRightClickLayer();
+    });
+
+    renderClimbSidebarMapV43();
+  })();
+})();
+</script>
 </html>
