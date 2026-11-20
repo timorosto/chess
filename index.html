@@ -36625,4 +36625,451 @@
   refreshContinueGrindingCardV32();
 })();
 </script>
+  <!-- ===================================================================== -->
+<!-- 🔒 V34 IRONCLAD FIRST-VISIT NAME PROMPT & CLEAN GITHUB PAGES SAVE     -->
+<!--    1. Stops V14/V18/V32 boot scripts from flashing & closing prompt   -->
+<!--    2. Removes "timorosto" default on fresh visits                     -->
+<!--    3. Permanently saves Name, Flag, ELO, Puzzles & History on reload  -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyIroncladOnboardingAndSaveV34() {
+  const V34_KEY = 'chess_pro_user_v34';
+  const MAX_HISTORY = 10;
+
+  const COUNTRIES = [
+    { code: 'US', label: 'United States' },
+    { code: 'UA', label: 'Ukraine' },
+    { code: 'CA', label: 'Canada' },
+    { code: 'GB', label: 'United Kingdom' },
+    { code: 'MX', label: 'Mexico' },
+    { code: 'ES', label: 'Spain' },
+    { code: 'FR', label: 'France' },
+    { code: 'DE', label: 'Germany' },
+    { code: 'IT', label: 'Italy' },
+    { code: 'BR', label: 'Brazil' },
+    { code: 'IN', label: 'India' },
+    { code: 'JP', label: 'Japan' },
+    { code: 'KR', label: 'South Korea' },
+    { code: 'NO', label: 'Norway' },
+    { code: 'AU', label: 'Australia' },
+    { code: 'PL', label: 'Poland' }
+  ];
+
+  let v34Confirmed = false;
+  let v34BootGuardTimer = null;
+
+  const cssV34 = document.createElement('style');
+  cssV34.textContent = `
+    #v34WelcomeModal {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 99999 !important;
+      background: rgba(12, 11, 10, 0.86) !important;
+      backdrop-filter: blur(5px) !important;
+      display: none !important;
+      align-items: center !important;
+      justify-content: center !important;
+      padding: 16px !important;
+    }
+    #v34WelcomeModal.v34-open {
+      display: flex !important;
+    }
+  `;
+  document.head.appendChild(cssV34);
+
+  function flagImgV34(code, w = 18, h = 13) {
+    const cc = (code || 'US').toLowerCase().replace(/[^a-z]/g, '').slice(0, 2) || 'us';
+    return `<img src="https://flagcdn.com/24x18/${cc}.png" alt="${cc.toUpperCase()}" style="display:inline-block;width:${w}px;height:${h}px;border-radius:2px;vertical-align:middle;object-fit:cover;box-shadow:0 1px 2px rgba(0,0,0,0.45);" />`;
+  }
+
+  function hideAllLegacyProfileModals() {
+    ['profileEditModal', 'v26OnboardingModal', 'v33ProfileModal'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.add('hidden');
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 1. LEAF-ONLY UI SYNC (SCRUBS "timorosto" EVERYWHERE WITHOUT BREAKING UI)
+  // -------------------------------------------------------------------------
+  function syncUiCleanV34(eloDelta = 0) {
+    while ((userProfile.xp || 0) >= 100) {
+      userProfile.xp -= 100;
+      userProfile.level = (userProfile.level || 1) + 1;
+    }
+    userProfile.elo = Math.max(0, Math.min(3500, Math.round(userProfile.elo || 0)));
+
+    const nameNow = (userProfile.playerName || '').trim() || 'Player';
+    const cc = (userProfile.countryCode || 'US').toUpperCase();
+
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setTxt('playerLevelBadge', `Lv.${userProfile.level || 1}`);
+    setTxt('profileEloBadge', `⚡ ${userProfile.elo} ELO`);
+    setTxt('profileStreakCount', String(userProfile.streak || 0));
+    setTxt('profileBrilliantCount', String(userProfile.brilliants || 0));
+    setTxt('rushRatingLobby', `⚡ ${userProfile.elo}`);
+
+    const xpEl = document.getElementById('profileXpFill');
+    if (xpEl) xpEl.style.width = `${Math.min(100, userProfile.xp || 0)}%`;
+
+    // Sync Coach Lobby greeting ("Hey [Name]!") safely via leaf node only
+    const setupLobby = document.getElementById('setupSidebarView');
+    if (setupLobby) {
+      setupLobby.querySelectorAll('b, strong').forEach(bEl => {
+        const prev = (bEl.previousSibling && bEl.previousSibling.textContent) || '';
+        if (/Hey\s*$/i.test(prev)) bEl.textContent = nameNow;
+      });
+    }
+
+    // Sync Bottom Player Bar & scrub any hardcoded "timorosto" / "Timo"
+    if (!window._isTwoPlayerLocalMode && !window._isOnlineMatch) {
+      const botRate = document.getElementById('bottomPlayerRating');
+      if (botRate) botRate.textContent = `(${userProfile.elo} ELO)`;
+
+      const botNameById = document.getElementById('bottomPlayerName');
+      if (botNameById) botNameById.textContent = nameNow;
+
+      const botRow = botRate ? botRate.closest('div.flex') : null;
+      if (botRow) {
+        botRow.querySelectorAll('span, div').forEach(el => {
+          if (el.id === 'bottomPlayerRating' || el.children.length > 0) return;
+          const t = (el.textContent || '').trim();
+          if (t === 'timorosto' || t === 'Timo' || el === (botRate && botRate.previousElementSibling)) {
+            el.textContent = nameNow;
+          }
+        });
+        const flagEl = document.getElementById('bottomPlayerFlag') || (botRate ? botRate.nextElementSibling : null);
+        if (flagEl && flagEl.tagName === 'SPAN' && !flagEl.querySelector('svg')) {
+          flagEl.innerHTML = flagImgV34(cc, 18, 13);
+        }
+      }
+
+      const wIn = document.getElementById('v23WhiteNameInput');
+      if (wIn && (!wIn.value || ['Timo', 'timorosto', 'Player'].includes(wIn.value.trim()))) {
+        wIn.value = nameNow;
+      }
+    }
+
+    const deltaEl = document.getElementById('profileEloDelta');
+    if (deltaEl && eloDelta !== 0) {
+      deltaEl.textContent = eloDelta > 0 ? `+${eloDelta}` : `${eloDelta}`;
+      deltaEl.style.color = eloDelta > 0 ? '#81b64c' : '#e05250';
+      deltaEl.classList.remove('hidden');
+      setTimeout(() => deltaEl.classList.add('hidden'), 2000);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 2. CLEAN SINGLE-SOURCE SAVE ENGINE (ONLY WRITES AFTER EXPLICIT CONFIRM)
+  // -------------------------------------------------------------------------
+  function buildSaveObjectV34() {
+    return {
+      v: 34,
+      confirmedByUser: true,
+      profile: {
+        ...userProfile,
+        playerName: (userProfile.playerName || '').trim(),
+        countryCode: (userProfile.countryCode || 'US').toUpperCase(),
+        v26NameConfirmed: true,
+        hasCompletedOnboardingV3: true,
+        v8CareerInitialized: true
+      },
+      completed: Array.from(completedLessons || []),
+      history: (window._matchHistoryV26 || []).slice(0, MAX_HISTORY),
+      botElo: typeof botElo === 'number' ? botElo : 400,
+      assistMode: window._v27AssistMode || 'balanced',
+      fastGrind: Boolean(userProfile.v32FastGrind),
+      ts: Date.now()
+    };
+  }
+
+  function writeSaveV34() {
+    if (!v34Confirmed || !userProfile.playerName) return;
+    const obj = buildSaveObjectV34();
+    const json = JSON.stringify(obj);
+
+    try { window.localStorage.setItem(V34_KEY, json); } catch (e) {}
+
+    // Overwrite all legacy keys with the user's REAL save so older patches stay synced on next boot!
+    const legacyKeys = [
+      'chess_pro_v33_confirmed_save',
+      'chess_pro_master_vault_v32',
+      'chess_pro_master_vault_v26',
+      'chess_pro_master_vault_v18',
+      'chess_pro_full_autosave_v14'
+    ];
+    legacyKeys.forEach(k => {
+      try { window.localStorage.setItem(k, json); } catch (e) {}
+    });
+    try { window.localStorage.setItem('chess_pro_coach_profile_v2', JSON.stringify(obj.profile)); } catch (e) {}
+    try { window.localStorage.setItem('chess_pro_completed_lessons_v11', JSON.stringify(obj.completed)); } catch (e) {}
+
+    // Mirror to IndexedDB
+    try {
+      if (window.indexedDB) {
+        const req = window.indexedDB.open('ChessProGrandmasterVaultDB', 1);
+        req.onupgradeneeded = (ev) => {
+          const db = ev.target.result;
+          if (!db.objectStoreNames.contains('saves')) db.createObjectStore('saves');
+        };
+        req.onsuccess = (ev) => {
+          const db = ev.target.result;
+          if (db.objectStoreNames.contains('saves')) {
+            db.transaction('saves', 'readwrite').objectStore('saves').put(json, V34_KEY);
+          }
+        };
+      }
+    } catch (e) {}
+  }
+
+  function applySavedV34(parsed) {
+    if (!parsed || parsed.v !== 34 || !parsed.confirmedByUser || !parsed.profile || !parsed.profile.playerName) {
+      return false;
+    }
+    v34Confirmed = true;
+    if (v34BootGuardTimer) { clearInterval(v34BootGuardTimer); v34BootGuardTimer = null; }
+
+    Object.assign(userProfile, parsed.profile);
+    if (typeof parsed.fastGrind === 'boolean') userProfile.v32FastGrind = parsed.fastGrind;
+
+    completedLessons.clear();
+    if (Array.isArray(parsed.completed)) {
+      parsed.completed.forEach(id => completedLessons.add(id));
+    }
+    if (Array.isArray(parsed.history)) {
+      window._matchHistoryV26 = parsed.history.slice(0, MAX_HISTORY);
+    }
+    if (typeof parsed.botElo === 'number') {
+      botElo = parsed.botElo;
+      const topRate = document.getElementById('topPlayerRating');
+      if (topRate && !window._isTwoPlayerLocalMode && !window._isOnlineMatch) {
+        topRate.textContent = `(${botElo})`;
+      }
+    }
+    if (parsed.assistMode && ['casual', 'balanced', 'challenging'].includes(parsed.assistMode)) {
+      window._v27AssistMode = parsed.assistMode;
+    }
+
+    hideAllLegacyProfileModals();
+    document.getElementById('v34WelcomeModal')?.classList.remove('v34-open');
+    syncUiCleanV34(0);
+    if (typeof renderHierarchyView === 'function' && !isRushRunActive) {
+      try { renderHierarchyView(); } catch (e) {}
+    }
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. IRONCLAD WELCOME / EDIT NAME & FLAG MODAL (#v34WelcomeModal)
+  // -------------------------------------------------------------------------
+  function openV34Modal(isFirstVisit = false) {
+    hideAllLegacyProfileModals();
+    let modal = document.getElementById('v34WelcomeModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'v34WelcomeModal';
+      modal.innerHTML = `
+        <div class="w-full max-w-[380px] rounded-2xl bg-[#21201d] border border-white/15 p-5 shadow-2xl space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 id="v34ModalTitle" class="text-base font-extrabold text-white">Choose Your Name &amp; Flag</h2>
+              <p class="text-xs text-[#9e9c99] mt-0.5">Your name, ELO, puzzles &amp; match history will auto-save.</p>
+            </div>
+            <button id="v34CloseBtn" type="button" class="text-[#9e9c99] hover:text-white text-sm font-bold px-2 py-1">✕</button>
+          </div>
+
+          <div class="space-y-3">
+            <div>
+              <label class="block text-[11px] font-bold text-[#c7c5c0] mb-1">Player Name</label>
+              <input id="v34NameInput" type="text" maxlength="18" placeholder="Enter your name..."
+                class="w-full px-3 py-2.5 rounded-xl bg-[#161512] border border-white/15 text-white text-sm font-semibold focus:outline-none focus:border-[#81b64c]" />
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-bold text-[#c7c5c0] mb-1">Country Flag</label>
+              <div class="flex items-center gap-2.5">
+                <div id="v34FlagPreview" class="w-10 h-9 rounded-xl bg-[#161512] border border-white/15 flex items-center justify-center flex-shrink-0"></div>
+                <select id="v34FlagSelect" class="flex-1 px-3 py-2.5 rounded-xl bg-[#161512] border border-white/15 text-white text-xs font-semibold focus:outline-none focus:border-[#81b64c]">
+                  ${COUNTRIES.map(c => `<option value="${c.code}">${c.label}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div id="v34ErrMsg" class="hidden text-xs font-bold text-[#f26b68]">Please enter a name first.</div>
+
+          <button id="v34SubmitBtn" type="button" class="w-full py-2.5 rounded-xl bg-[#81b64c] hover:bg-[#93c75e] text-white font-bold text-sm shadow transition">
+            Save &amp; Play
+          </button>
+
+          <div class="text-center pt-1 border-t border-white/10">
+            <button id="v34ToggleCodeBtn" type="button" class="text-[11px] font-semibold text-[#32b8e6] hover:underline">
+              Have a Save Code? Restore it here
+            </button>
+            <div id="v34CodeBox" class="hidden mt-2 flex gap-1.5">
+              <input id="v34CodeInput" type="text" placeholder="Paste CP32-... code"
+                class="flex-1 px-2.5 py-1.5 rounded-lg bg-[#161512] border border-white/15 text-white font-mono text-[11px]" />
+              <button id="v34CodeLoadBtn" type="button" class="px-3 py-1.5 rounded-lg bg-[#32b8e6] text-[#141311] font-bold text-xs">Load</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      const sel = modal.querySelector('#v34FlagSelect');
+      const prev = modal.querySelector('#v34FlagPreview');
+      sel.addEventListener('change', () => { prev.innerHTML = flagImgV34(sel.value, 24, 18); });
+
+      const saveFromModal = () => {
+        const val = (modal.querySelector('#v34NameInput').value || '').trim();
+        const err = modal.querySelector('#v34ErrMsg');
+        if (!val) {
+          err.textContent = 'Please enter a name first.';
+          err.classList.remove('hidden');
+          return;
+        }
+        err.classList.add('hidden');
+        userProfile.playerName = val;
+        userProfile.countryCode = sel.value || 'US';
+        v34Confirmed = true;
+        if (v34BootGuardTimer) { clearInterval(v34BootGuardTimer); v34BootGuardTimer = null; }
+
+        modal.classList.remove('v34-open');
+        hideAllLegacyProfileModals();
+        syncUiCleanV34(0);
+        writeSaveV34();
+        try { playChessSound('levelup'); } catch (e) {}
+      };
+
+      modal.querySelector('#v34SubmitBtn').addEventListener('click', saveFromModal);
+      modal.querySelector('#v34NameInput').addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') saveFromModal();
+      });
+      modal.querySelector('#v34CloseBtn').addEventListener('click', () => {
+        if (v34Confirmed) modal.classList.remove('v34-open');
+      });
+      modal.querySelector('#v34ToggleCodeBtn').addEventListener('click', () => {
+        modal.querySelector('#v34CodeBox').classList.toggle('hidden');
+      });
+      modal.querySelector('#v34CodeLoadBtn').addEventListener('click', () => {
+        const raw = (modal.querySelector('#v34CodeInput').value || '').trim();
+        const err = modal.querySelector('#v34ErrMsg');
+        try {
+          const b64 = raw.startsWith('CP32-') ? raw.slice(5) : raw;
+          const d = JSON.parse(decodeURIComponent(escape(atob(b64))));
+          applySavedV34({
+            v: 34,
+            confirmedByUser: true,
+            profile: {
+              ...userProfile,
+              playerName: d.n || 'Player',
+              countryCode: d.c || 'US',
+              elo: Number(d.e) || 0,
+              level: Number(d.l) || 1,
+              xp: Number(d.x) || 0,
+              streak: Number(d.s) || 0,
+              brilliants: Number(d.b) || 0
+            },
+            completed: Array.isArray(d.d) ? d.d : [],
+            botElo: Number(d.be) || 400
+          });
+          writeSaveV34();
+          err.classList.add('hidden');
+        } catch (e) {
+          err.textContent = 'Invalid Save Code.';
+          err.classList.remove('hidden');
+        }
+      });
+    }
+
+    modal.querySelector('#v34CloseBtn').classList.toggle('hidden', isFirstVisit);
+    modal.querySelector('#v34ModalTitle').textContent = isFirstVisit ? 'Choose Your Name & Flag' : 'Edit Name & Flag';
+    const inp = modal.querySelector('#v34NameInput');
+    inp.value = isFirstVisit ? '' : ((userProfile.playerName || '').trim());
+    const sel = modal.querySelector('#v34FlagSelect');
+    sel.value = (userProfile.countryCode || 'US').toUpperCase();
+    modal.querySelector('#v34FlagPreview').innerHTML = flagImgV34(sel.value, 24, 18);
+    modal.querySelector('#v34ErrMsg').classList.add('hidden');
+    modal.classList.add('v34-open');
+    setTimeout(() => inp.focus(), 50);
+  }
+
+  window.openProfileEditModal = function(isFirst = false) {
+    openV34Modal(Boolean(isFirst));
+  };
+
+  // NEVER auto-confirm inside saveAndRenderProfile — only write if user has already confirmed!
+  window.saveAndRenderProfile = function(eloDelta = 0) {
+    syncUiCleanV34(eloDelta);
+    if (v34Confirmed) writeSaveV34();
+  };
+
+  window.addEventListener('beforeunload', () => { if (v34Confirmed) writeSaveV34(); });
+  window.addEventListener('pagehide', () => { if (v34Confirmed) writeSaveV34(); });
+
+  // -------------------------------------------------------------------------
+  // 4. BOOT CHECK: LOAD CONFIRMED V34 SAVE OR LOCK ON CLEAN WELCOME PROMPT!
+  // -------------------------------------------------------------------------
+  let loadedSync = false;
+  try {
+    const raw = window.localStorage.getItem(V34_KEY);
+    if (raw) loadedSync = applySavedV34(JSON.parse(raw));
+  } catch (e) {}
+
+  if (loadedSync) {
+    // Re-sync UI after 300ms & 800ms in case legacy async IndexedDB callbacks fire late
+    setTimeout(() => { syncUiCleanV34(0); writeSaveV34(); }, 300);
+    setTimeout(() => { syncUiCleanV34(0); }, 850);
+  } else {
+    // Fresh user! Clear any legacy boot pollution ("timorosto" / 200 ELO) & lock on Welcome Prompt
+    const enforceFreshState = () => {
+      if (v34Confirmed) return;
+      userProfile.playerName = '';
+      userProfile.countryCode = 'US';
+      userProfile.elo = 0;
+      userProfile.level = 1;
+      userProfile.xp = 0;
+      userProfile.streak = 0;
+      userProfile.brilliants = 0;
+      completedLessons.clear();
+      hideAllLegacyProfileModals();
+      syncUiCleanV34(0);
+    };
+
+    enforceFreshState();
+    openV34Modal(true);
+
+    // Guard against legacy V18/V32 async IndexedDB/Cache callbacks trying to re-inject "timorosto"!
+    let ticks = 0;
+    v34BootGuardTimer = setInterval(() => {
+      ticks++;
+      if (v34Confirmed || ticks > 30) {
+        clearInterval(v34BootGuardTimer);
+        v34BootGuardTimer = null;
+        return;
+      }
+      enforceFreshState();
+    }, 100);
+
+    // Check IndexedDB only for a real confirmed V34 save
+    try {
+      if (window.indexedDB) {
+        const req = window.indexedDB.open('ChessProGrandmasterVaultDB', 1);
+        req.onsuccess = (ev) => {
+          const db = ev.target.result;
+          if (!db.objectStoreNames.contains('saves')) return;
+          const g = db.transaction('saves', 'readonly').objectStore('saves').get(V34_KEY);
+          g.onsuccess = () => {
+            if (!g.result) return;
+            try {
+              if (applySavedV34(JSON.parse(g.result))) writeSaveV34();
+            } catch (e) {}
+          };
+        };
+      }
+    } catch (e) {}
+  }
+})();
+</script>
 </html>
