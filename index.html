@@ -39769,4 +39769,1283 @@
   }, true);
 })();
 </script>
+  <!-- ===================================================================== -->
+<!-- 🎓 V37 SIMPLE ANIMATED COACH VIDEO ("EXPLAIN LIKE I'M 8" EDITION)     -->
+<!--    1. Fixes straight vertical/horizontal arrows (crisp polygon SVG)   -->
+<!--    2. Filters fake threats (only shows REAL danger & free pieces)     -->
+<!--    3. Live piece animations (literally shows the oops & the easy fix) -->
+<!--    4. Minimalist clutter-free sidebar + plain-English 2-sentence text -->
+<!--    Zero changes to Play, Puzzles, Online 1v1, History, or Auto-Save   -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applySimpleKidFriendlyCoachVideoV37() {
+  const STD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const FILES = 'abcdefgh';
+  const PVAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+  const PPTS = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+  const PNAME = { p: 'Pawn', n: 'Knight', b: 'Bishop', r: 'Rook', q: 'Queen', k: 'King' };
+
+  // -------------------------------------------------------------------------
+  // 1. CLEAN MINIMALIST STYLES + CRISP POLYGON ARROW LAYER (NO CLIP BUG!)
+  // -------------------------------------------------------------------------
+  const cssV37 = document.createElement('style');
+  cssV37.textContent = `
+    #v37ArrowSvg {
+      position: absolute;
+      z-index: 52;
+      pointer-events: none;
+      overflow: visible;
+      filter: drop-shadow(0 3px 4px rgba(0,0,0,0.58));
+    }
+    #v37ArrowSvg.hidden { display: none !important; }
+
+    .v37-ring-glow {
+      animation: v37Pulse 1.25s ease-in-out infinite;
+    }
+    @keyframes v37Pulse {
+      0%, 100% { stroke-opacity: 0.96; fill-opacity: 0.22; }
+      50%      { stroke-opacity: 0.45; fill-opacity: 0.08; }
+    }
+
+    #v37VideoPanel {
+      position: absolute;
+      inset: 0;
+      z-index: 96;
+      background: #1c1b18;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-left: 1px solid rgba(255,255,255,0.08);
+    }
+    #v37VideoPanel.hidden { display: none !important; }
+
+    .v37-step-dots {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: center;
+    }
+    .v37-dot-pill {
+      flex: 1;
+      padding: 6px 4px;
+      border-radius: 8px;
+      background: #262522;
+      border: 1px solid rgba(255,255,255,0.07);
+      color: #9e9c99;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.14s ease;
+    }
+    .v37-dot-pill:hover { color: #ffffff; background: #302e2a; }
+    .v37-dot-pill.active-red   { background: rgba(239,68,68,0.18); border-color: #ef4444; color: #ff9c9a; }
+    .v37-dot-pill.active-blue  { background: rgba(50,184,230,0.18); border-color: #32b8e6; color: #9ae5ff; }
+    .v37-dot-pill.active-green { background: rgba(129,182,76,0.22); border-color: #81b64c; color: #c0ed92; }
+
+    .v37-story-card {
+      background: #252420;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 16px 14px;
+      space-y: 10px;
+    }
+    .v37-tip-box {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #181714;
+      border-left: 3px solid #f7c045;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #e2e0dc;
+    }
+
+    .v37-moment-nav {
+      display: flex;
+      gap: 5px;
+      padding: 8px 12px;
+      background: #151412;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      overflow-x: auto;
+      scrollbar-width: none;
+      flex-shrink: 0;
+    }
+    .v37-moment-nav::-webkit-scrollbar { display: none; }
+    .v37-m-btn {
+      padding: 5px 10px;
+      border-radius: 99px;
+      background: #252420;
+      border: 1px solid rgba(255,255,255,0.08);
+      color: #a8a6a1;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .v37-m-btn:hover { color: #ffffff; }
+    .v37-m-btn.active {
+      background: #81b64c;
+      border-color: #a8dc73;
+      color: #ffffff;
+    }
+
+    .v37-btn {
+      padding: 9px 10px;
+      border-radius: 10px;
+      background: #2b2926;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #eae8e4;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .v37-btn:hover { background: #383530; color: #ffffff; }
+    .v37-btn:disabled { opacity: 0.32; pointer-events: none; }
+    .v37-btn.next-primary {
+      background: #81b64c;
+      border-color: #9dd466;
+      color: #ffffff;
+    }
+    .v37-btn.next-primary:hover { background: #91c75c; }
+  `;
+  document.head.appendChild(cssV37);
+
+  // -------------------------------------------------------------------------
+  // 2. POLYGON ARROW & SQUARE HIGHLIGHT RENDERER (100% VERTICAL/HORIZ SAFE!)
+  // -------------------------------------------------------------------------
+  function getArrowSvgV37() {
+    if (!boardEl || !boardEl.parentElement) return null;
+    const parent = boardEl.parentElement;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    let svg = document.getElementById('v37ArrowSvg');
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = 'v37ArrowSvg';
+      svg.setAttribute('viewBox', '0 0 800 800');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.classList.add('hidden');
+      parent.appendChild(svg);
+    }
+    svg.style.left   = `${boardEl.offsetLeft}px`;
+    svg.style.top    = `${boardEl.offsetTop}px`;
+    svg.style.width  = `${boardEl.offsetWidth}px`;
+    svg.style.height = `${boardEl.offsetHeight}px`;
+    return svg;
+  }
+
+  function sqCenterV37(sq) {
+    if (!sq || sq.length < 2) return null;
+    const f = FILES.indexOf(sq[0]);
+    const r = parseInt(sq[1], 10);
+    if (f < 0 || isNaN(r)) return null;
+    const col = boardFlipped ? (7 - f) : f;
+    const row = boardFlipped ? (r - 1) : (8 - r);
+    return { x: col * 100 + 50, y: row * 100 + 50, col, row };
+  }
+
+  function buildArrowPolygonPoints(x1, y1, x2, y2, shaftHalfW = 10, headHalfW = 22) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const L = Math.hypot(dx, dy);
+    if (L < 25) return '';
+    const ux = dx / L, uy = dy / L;
+    const px = -uy, py = ux;
+
+    const startOff = Math.min(18, L * 0.16);
+    const tipOff   = Math.min(14, L * 0.12);
+    const effLen   = Math.max(24, L - startOff - tipOff);
+    const headLen  = Math.min(36, Math.max(22, effLen * 0.44));
+
+    const sx = x1 + ux * startOff;
+    const sy = y1 + uy * startOff;
+    const tx = x2 - ux * tipOff;
+    const ty = y2 - uy * tipOff;
+    const bx = tx - ux * headLen;
+    const by = ty - uy * headLen;
+
+    const pts = [
+      [sx + px * shaftHalfW, sy + py * shaftHalfW],
+      [bx + px * shaftHalfW, by + py * shaftHalfW],
+      [bx + px * headHalfW,  by + py * headHalfW],
+      [tx, ty],
+      [bx - px * headHalfW,  by - py * headHalfW],
+      [bx - px * shaftHalfW, by - py * shaftHalfW],
+      [sx - px * shaftHalfW, sy - py * shaftHalfW]
+    ];
+    return pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  }
+
+  function drawV37BoardGraphics(arrows = [], rings = []) {
+    const svg = getArrowSvgV37();
+    if (!svg) return;
+    svg.classList.remove('hidden');
+
+    const COLORS = {
+      red:   '#ef4444',
+      green: '#81b64c',
+      blue:  '#32b8e6',
+      gold:  '#f7c045',
+      cyan:  '#1baca6'
+    };
+
+    let html = '';
+
+    // 1. Highlight rings with clear plain-English tags ("FREE!", "SAFE!", "MATE!")
+    (rings || []).forEach(rg => {
+      const pt = sqCenterV37(rg.sq);
+      if (!pt) return;
+      const col = COLORS[rg.color] || COLORS.gold;
+      const x0 = pt.col * 100 + 4;
+      const y0 = pt.row * 100 + 4;
+      html += `<rect x="${x0}" y="${y0}" width="92" height="92" rx="12" fill="${col}" fill-opacity="0.18" stroke="${col}" stroke-width="7" class="${rg.pulse ? 'v37-ring-glow' : ''}" />`;
+      if (rg.tag) {
+        const w = Math.max(46, rg.tag.length * 10 + 14);
+        const tx = Math.min(800 - w - 4, x0 + 92 - w + 4);
+        const ty = Math.max(4, y0 - 8);
+        html += `<rect x="${tx}" y="${ty}" width="${w}" height="24" rx="7" fill="${col}" stroke="#141311" stroke-width="2" />`;
+        html += `<text x="${tx + w / 2}" y="${ty + 16.5}" text-anchor="middle" fill="#141311" font-size="13" font-weight="900" font-family="Inter, sans-serif">${rg.tag}</text>`;
+      }
+    });
+
+    // 2. Crisp Chess.com-style polygon arrows (vertical, horizontal & diagonal ALL work!)
+    (arrows || []).forEach(ar => {
+      if (!ar || !ar.from || !ar.to || ar.from === ar.to) return;
+      const p1 = sqCenterV37(ar.from);
+      const p2 = sqCenterV37(ar.to);
+      if (!p1 || !p2) return;
+      const col = COLORS[ar.color] || COLORS.green;
+      const pts = buildArrowPolygonPoints(p1.x, p1.y, p2.x, p2.y, ar.thin ? 7.5 : 10.5, ar.thin ? 17 : 23);
+      if (!pts) return;
+      html += `<polygon points="${pts}" fill="${col}" fill-opacity="${ar.opacity || 0.9}" stroke="rgba(18,17,15,0.55)" stroke-width="2.2" stroke-linejoin="round" />`;
+    });
+
+    svg.innerHTML = html;
+  }
+
+  function clearV37Graphics() {
+    const svg = document.getElementById('v37ArrowSvg');
+    if (svg) {
+      svg.innerHTML = '';
+      svg.classList.add('hidden');
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. ACCURATE "REAL DANGER ONLY" SCANNER (NO FAKE Queen-takes-defended-Knight!)
+  // -------------------------------------------------------------------------
+  function findKingSquare(chess, color) {
+    const b = chess.board();
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      if (b[r][c] && b[r][c].color === color && b[r][c].type === 'k') return FILES[c] + (8 - r);
+    }
+    return null;
+  }
+
+  function getDefendersOnSq(fen, sq, ownerColor) {
+    try {
+      const sim = new Chess(fen);
+      const opp = ownerColor === 'w' ? 'b' : 'w';
+      const orig = sim.get(sq);
+      if (!orig || orig.type === 'k') return [];
+      sim.remove(sq);
+      sim.put({ type: 'p', color: opp }, sq);
+      const parts = sim.fen().split(' ');
+      parts[1] = ownerColor;
+      parts[3] = '-';
+      return new Chess(parts.join(' ')).moves({ verbose: true }).filter(m => m.to === sq && m.captured);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function findRealThreatsOnlyV37(fen, moverColor) {
+    const oppColor = moverColor === 'w' ? 'b' : 'w';
+    const realThreats = [];
+
+    try {
+      const cur = new Chess(fen);
+      const myKingSq = findKingSquare(cur, moverColor);
+
+      // 1. If ALREADY in check, highlight the checking attacker!
+      if (cur.turn() === moverColor && cur.in_check() && myKingSq) {
+        const b = cur.board();
+        for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+          const p = b[r][c];
+          if (!p || p.color !== oppColor) continue;
+          const sq = FILES[c] + (8 - r);
+          const kr = 8 - parseInt(myKingSq[1], 10), kc = FILES.indexOf(myKingSq[0]);
+          const dr = Math.abs(kr - r), dc = Math.abs(kc - c);
+          const hits = (p.type === 'n' && ((dr === 2 && dc === 1) || (dr === 1 && dc === 2))) ||
+                       ((p.type === 'r' || p.type === 'q') && (dr === 0 || dc === 0)) ||
+                       ((p.type === 'b' || p.type === 'q') && dr === dc) ||
+                       (p.type === 'p' && dc === 1 && dr === 1);
+          if (hits) {
+            realThreats.push({
+              kind: 'in_check',
+              from: sq, to: myKingSq, piece: p.type, target: 'k',
+              score: 9999,
+              headline: `🛡️ Your King Is in Check!`,
+              simpleText: `Their <b>${PNAME[p.type]} on ${sq}</b> is attacking your King! You have to move your King, block it, or capture the attacker.`
+            });
+          }
+        }
+        return realThreats.slice(0, 1);
+      }
+
+      // 2. Flip turn to opponent to see what REALLY hurts us if we ignore them!
+      const parts = fen.split(' ');
+      parts[1] = oppColor;
+      parts[3] = '-';
+      const oppChess = new Chess(parts.join(' '));
+      const oppMoves = oppChess.moves({ verbose: true });
+
+      for (let i = 0; i < oppMoves.length; i++) {
+        const m = oppMoves[i];
+
+        if (m.san.includes('#')) {
+          realThreats.push({
+            kind: 'mate',
+            from: m.from, to: m.to, piece: m.piece, target: 'k',
+            score: 10000,
+            headline: `🚨 Checkmate Danger on ${m.to}!`,
+            simpleText: `Watch out! Their <b>${PNAME[m.piece]}</b> wants to jump to <b>${m.to}</b> for instant Checkmate!`
+          });
+          continue;
+        }
+
+        if (m.captured) {
+          const capVal = PVAL[m.captured] || 100;
+          const atkVal = PVAL[m.piece] || 100;
+          const defs = getDefendersOnSq(fen, m.to, moverColor);
+
+          // REAL Threat #1: Piece is completely UNDEFENDED (FREE!)
+          if (defs.length === 0 && capVal >= 100) {
+            realThreats.push({
+              kind: 'free_piece',
+              from: m.from, to: m.to, piece: m.piece, target: m.captured,
+              score: 700 + capVal,
+              headline: `🚨 Free ${PNAME[m.captured]} on ${m.to}!`,
+              simpleText: `Nobody is protecting your <b>${PNAME[m.captured]} on ${m.to}</b>! Their <b>${PNAME[m.piece]}</b> can take it for free.`
+            });
+          }
+          // REAL Threat #2: Cheaper piece attacking a MORE VALUABLE piece (e.g., Pawn/Bishop attacking Queen/Rook!)
+          else if (atkVal + 50 < capVal) {
+            realThreats.push({
+              kind: 'bad_trade',
+              from: m.from, to: m.to, piece: m.piece, target: m.captured,
+              score: 550 + (capVal - atkVal),
+              headline: `⚠️ Your ${PNAME[m.captured]} Is Under Attack!`,
+              simpleText: `Their <b>${PNAME[m.piece]} (${PPTS[m.piece]} pts)</b> wants to take your <b>${PNAME[m.captured]} (${PPTS[m.captured]} pts)</b> on <b>${m.to}</b>!`
+            });
+          }
+          // Otherwise (e.g., Queen attacking a pawn-guarded Knight): IGNORE! That's a fake threat!
+        } else if (m.san.includes('+')) {
+          // Check threat ONLY if the checking square isn't immediately losing the checking piece
+          const simChk = new Chess(oppChess.fen());
+          simChk.move(m);
+          const ourCapsOnChk = simChk.moves({ verbose: true }).filter(x => x.to === m.to);
+          if (ourCapsOnChk.length === 0) {
+            realThreats.push({
+              kind: 'check',
+              from: m.from, to: m.to, piece: m.piece, target: 'k',
+              score: 360,
+              headline: `⚠️ Safe Check Threat on ${m.to}!`,
+              simpleText: `Their <b>${PNAME[m.piece]}</b> can jump to <b>${m.to}</b> and put your King in check.`
+            });
+          }
+        }
+      }
+
+      realThreats.sort((a, b) => b.score - a.score);
+      // Keep at most 2 distinct real threats so the board stays super clean!
+      const clean = [];
+      const seenTo = new Set();
+      for (const th of realThreats) {
+        if (seenTo.has(th.to)) continue;
+        seenTo.add(th.to);
+        clean.push(th);
+        if (clean.length >= 2) break;
+      }
+      return clean;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function ensureStepDataV37(step) {
+    if (!step) return;
+    if (!step.bestMoveBefore) {
+      try {
+        const sim = new Chess(step.fenBefore);
+        const legals = sim.moves({ verbose: true });
+        if (legals.length > 0) {
+          const turn = sim.turn();
+          let best = legals[0], bestSc = -999999;
+          for (let i = 0; i < legals.length; i++) {
+            const m = legals[i];
+            sim.move(m);
+            let sc = 0;
+            if (sim.in_checkmate()) sc = 99999;
+            else {
+              const b = sim.board();
+              for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+                const p = b[r][c]; if (!p) continue;
+                sc += (p.color === turn ? 1 : -1) * (PVAL[p.type] || 100);
+              }
+              const oppCaps = sim.moves({ verbose: true }).filter(x => x.to === m.to);
+              if (oppCaps.length > 0) sc -= (PVAL[m.piece] || 100) * 0.85;
+              if (m.san === 'O-O' || m.san === 'O-O-O') sc += 45;
+            }
+            sim.undo();
+            if (sc > bestSc) { bestSc = sc; best = m; }
+          }
+          step.bestMoveBefore = best;
+        }
+      } catch (e) {}
+    }
+    if (!step.oppBestReply) {
+      try {
+        const simA = new Chess(step.fenAfter);
+        if (!simA.game_over()) {
+          const oMoves = simA.moves({ verbose: true });
+          step.oppBestReply =
+            oMoves.find(m => m.san.includes('#')) ||
+            oMoves.filter(m => m.captured).sort((a, b) => (PVAL[b.captured] || 100) - (PVAL[a.captured] || 100))[0] ||
+            oMoves.find(m => m.san.includes('+')) ||
+            oMoves[0] || null;
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Opening matcher for the 1-click Academy practice button
+  function findOpeningPracticeV37() {
+    if (customStartFen !== STD_FEN || typeof GM_LESSONS === 'undefined') return null;
+    const sans = timeline.map(t => t.san);
+    const seq = sans.join(' ');
+    const w1 = sans[0] || '', b1 = sans[1] || '';
+    let id = 'v6-open-1';
+    if (seq.startsWith('e4 e5 Nf3 Nc6 Bc4 Nf6 Ng5')) id = 'v6-open-2';
+    else if (seq.startsWith('e4 e5 Nf3 Nc6 Bb5')) id = 'v6-open-3';
+    else if (seq.startsWith('e4 e5 Nf3 Nc6 d4')) id = 'v6-open-4';
+    else if (seq.startsWith('e4 e5 Nc3')) id = 'v17-open-vienna';
+    else if (seq.startsWith('e4 e5 f4')) id = 'v6-open-1c';
+    else if (seq.startsWith('e4 e5 Qh5')) id = 'v6-open-9';
+    else if (w1 === 'e4' && b1 === 'c5') id = sans[2] === 'c3' ? 'v17-open-alapin' : (sans[2] === 'Nc3' ? 'v17-open-grand-prix' : 'v6-open-5');
+    else if (w1 === 'e4' && b1 === 'e6') id = 'v6-open-6';
+    else if (w1 === 'e4' && b1 === 'c6') id = 'v6-open-7';
+    else if (w1 === 'e4' && b1 === 'd5') id = 'v6-open-8';
+    else if (w1 === 'd4' && sans.includes('Bf4') && sans.includes('Nc3')) id = 'v17-open-jobava';
+    else if (w1 === 'd4' && sans.includes('Bf4')) id = 'v6-open-12';
+    else if (w1 === 'd4') id = 'v6-open-11';
+    else if (w1 === 'c4') id = 'v6-open-12c';
+    const idx = GM_LESSONS.findIndex(l => l && l.id === id);
+    return idx >= 0 ? { idx, lesson: GM_LESSONS[idx] } : null;
+  }
+
+  function jumpToLessonV37(globalIdx) {
+    if (globalIdx < 0 || !GM_LESSONS[globalIdx]) return;
+    closeV37Video();
+    document.getElementById('gameOverRatingModal')?.classList.add('hidden');
+    document.getElementById('v23TwoPlayerResultModal')?.classList.add('hidden');
+    window.activateSidebarTab('lessons');
+
+    const les = GM_LESSONS[globalIdx];
+    rushRunQueue = GM_LESSONS.map((item, idx) => ({ item, idx }))
+      .filter(x => x.item && x.item.chapterId === les.chapterId).map(x => x.idx);
+    rushQueuePtr = Math.max(0, rushRunQueue.indexOf(globalIdx));
+    rushGameMode = 'adaptive';
+    isRushRunActive = true;
+
+    document.getElementById('academyWorldMapView')?.classList.add('hidden');
+    document.getElementById('rushLobbyView')?.classList.add('hidden');
+    document.getElementById('rushGameOverView')?.classList.add('hidden');
+    const act = document.getElementById('rushActiveGameView');
+    if (act) { act.classList.remove('hidden'); act.classList.add('flex'); }
+    window.loadInteractiveLesson(globalIdx);
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. BUILD ULTRA-SIMPLE KID-FRIENDLY STORYBOARD (MAX 3 KEY MOMENTS!)
+  // -------------------------------------------------------------------------
+  function calcSimpleStatsV37() {
+    const empty = () => ({ brilliant: 0, great: 0, best: 0, book: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 });
+    const c = { w: empty(), b: empty() };
+    let wS = 0, wN = 0, bS = 0, bN = 0;
+    let wCastled = false, bCastled = false;
+
+    timeline.forEach(st => {
+      const mv = st.moveObj; if (!mv) return;
+      const side = mv.color;
+      const k = (st.classification && st.classification.key) ? st.classification.key : 'good';
+      if (c[side][k] !== undefined) c[side][k]++;
+      if (mv.san === 'O-O' || mv.san === 'O-O-O') { if (side === 'w') wCastled = true; else bCastled = true; }
+      const loss = Math.max(0, Math.min(600, st.cpLoss || 0));
+      let acc = 100 * Math.exp(-0.0042 * loss);
+      if (['brilliant', 'great', 'best', 'book'].includes(k)) acc = Math.max(acc, 97);
+      else if (k === 'excellent') acc = Math.max(acc, 88);
+      if (side === 'w') { wS += acc; wN++; } else { bS += acc; bN++; }
+    });
+
+    const wAcc = wN > 0 ? Math.round(wS / wN) : 80;
+    const bAcc = bN > 0 ? Math.round(bS / bN) : 80;
+    const eloFor = (acc, cnt, n) => {
+      if (n === 0) return 400;
+      let e = 150 + Math.pow(acc / 100, 2.2) * 2300 + cnt.brilliant * 95 + cnt.great * 45 - cnt.blunder * 70 - cnt.mistake * 28;
+      if (n < 4) e = Math.min(e, 1450);
+      return Math.max(150, Math.min(2750, Math.round(e / 10) * 10));
+    };
+
+    return { c, wAcc, bAcc, wElo: eloFor(wAcc, c.w, wN), bElo: eloFor(bAcc, c.b, bN), wCastled, bCastled };
+  }
+
+  function buildSimpleStoryV37() {
+    const isDual = Boolean(window._isTwoPlayerLocalMode || window._isOnlineMatch);
+    const isCustom = (customStartFen !== STD_FEN);
+    const mySide = playerColor === 'b' ? 'b' : 'w';
+    const wName = isDual ? (window._twoPlayerNames?.w || 'White') : (playerColor === 'w' ? (userProfile.playerName || 'You') : 'Coach');
+    const bName = isDual ? (window._twoPlayerNames?.b || 'Black') : (playerColor === 'b' ? (userProfile.playerName || 'You') : 'Coach');
+
+    if (!timeline || timeline.length === 0) {
+      return {
+        groups: [{ label: 'Start', frames: [0] }],
+        frames: [{
+          groupIdx: 0,
+          emoji: '♟️',
+          title: 'Play a Game First!',
+          bodyHtml: 'Finish a match against Coach Magnus, a Friend, or Online 1v1—then open Coach Breakdown to see the easiest way to improve.',
+          tipHtml: '💡 <b>Tip:</b> Even a short 6-move game gives you a full breakdown!',
+          stages: [{ fen: STD_FEN, evalCp: 20, arrows: [{ from: 'e2', to: 'e4', color: 'green' }], rings: [] }]
+        }]
+      };
+    }
+
+    const stats = calcSimpleStatsV37();
+    const openMatch = findOpeningPracticeV37();
+    const groups = [];
+    const frames = [];
+
+    function addGroup(label, grpFrames) {
+      const gIdx = groups.length;
+      const idxs = [];
+      grpFrames.forEach(fr => {
+        fr.groupIdx = gIdx;
+        idxs.push(frames.length);
+        frames.push(fr);
+      });
+      groups.push({ label, frames: idxs });
+    }
+
+    // ==================== 1. SIMPLE GAME SUMMARY CARD ====================
+    const myAcc = mySide === 'w' ? stats.wAcc : stats.bAcc;
+    const myElo = mySide === 'w' ? stats.wElo : stats.bElo;
+    const lastBookPly = Math.min(3, timeline.length - 1);
+    const openName = isCustom ? 'Custom Setup' : (timeline[lastBookPly]?.openingName || 'Chess Match');
+
+    const summaryBody = isDual
+      ? `<b>${wName}</b> played at <b>${stats.wElo} ELO (${stats.wAcc}%)</b> and <b>${bName}</b> played at <b>${stats.bElo} ELO (${stats.bAcc}%)</b>. Let's look at the <b>3 biggest moments</b> that decided the game!`
+      : `You played at <b>${myElo} ELO</b> with <b>${myAcc}% accuracy</b>! Let's walk through the <b>3 biggest moments</b> so you can spot them instantly next game.`;
+
+    addGroup('Summary', [{
+      emoji: '🎬',
+      title: isDual ? `${wName} vs ${bName}` : `Your Game Summary`,
+      bodyHtml: summaryBody,
+      tipHtml: isCustom
+        ? '🧪 <b>Custom Board:</b> Skipping opening talk—going straight to the tactics!'
+        : `📖 <b>Opening Played:</b> ${openName}`,
+      stages: [{
+        fen: isCustom ? customStartFen : (timeline[lastBookPly]?.fenAfter || STD_FEN),
+        evalCp: timeline[lastBookPly]?.evalAfterWhiteCp || 20,
+        arrows: timeline[0] ? [{ from: timeline[0].moveObj.from, to: timeline[0].moveObj.to, color: 'blue' }] : [],
+        rings: []
+      }],
+      cta: (!isCustom && openMatch) ? {
+        label: `📘 Practice ${openMatch.lesson.title.replace(/^\d+\.\s*/, '')} ▶`,
+        onClick: () => jumpToLessonV37(openMatch.idx)
+      } : null
+    }]);
+
+    // ==================== 2. PICK ONLY THE TOP 3 BIGGEST MOMENTS ====================
+    const cands = [];
+    timeline.forEach((st, idx) => {
+      if (!isCustom && idx <= 3) return;
+      const mv = st.moveObj; if (!mv) return;
+      const isTargetPlayer = isDual || (mv.color === playerColor);
+      if (!isTargetPlayer) return;
+
+      const k = (st.classification && st.classification.key) ? st.classification.key : 'good';
+      const loss = st.cpLoss || 0;
+      let score = 0;
+      let kind = 'tip';
+      if (k === 'brilliant') { score = 1200; kind = 'brilliant'; }
+      else if (k === 'blunder') { score = 850 + Math.min(400, loss); kind = 'oops'; }
+      else if (k === 'mistake') { score = 550 + Math.min(250, loss); kind = 'oops'; }
+      else if (k === 'great')   { score = 600; kind = 'great'; }
+      else if (k === 'inaccuracy') { score = 250 + loss; kind = 'oops'; }
+
+      if (score > 0) cands.push({ idx, st, score, kind });
+    });
+
+    if (cands.length === 0) {
+      timeline.forEach((st, idx) => {
+        if ((!isCustom && idx <= 3) || (!isDual && st.moveObj.color !== playerColor)) return;
+        cands.push({ idx, st, score: 100 + idx, kind: 'good' });
+      });
+    }
+
+    cands.sort((a, b) => b.score - a.score);
+    const top3 = [];
+    for (const c of cands) {
+      if (top3.some(x => Math.abs(x.idx - c.idx) <= 1)) continue;
+      top3.push(c);
+      if (top3.length >= 3) break;
+    }
+    top3.sort((a, b) => a.idx - b.idx);
+
+    let freePieceMistakes = 0;
+
+    top3.forEach(({ idx, st, kind }, mNumIdx) => {
+      ensureStepDataV37(st);
+      const mv = st.moveObj;
+      const best = st.bestMoveBefore || mv;
+      const moveNum = Math.floor(idx / 2) + 1;
+      const moverColor = mv.color;
+      const who = isDual ? (moverColor === 'w' ? wName : bName) : 'You';
+      const whoPoss = isDual ? `${who}'s` : 'your';
+      const opp = isDual ? (moverColor === 'w' ? bName : wName) : 'Coach';
+      const realThreats = findRealThreatsOnlyV37(st.fenBefore, moverColor);
+      const topThreat = realThreats[0] || null;
+      const isBadMove = (kind === 'oops' && best.san !== mv.san);
+
+      if (topThreat && topThreat.kind === 'free_piece' && isBadMove) freePieceMistakes++;
+
+      // -------- STEP 1: WATCH OUT! (BEFORE THE MOVE — NEVER SPOILS THE ANSWER!) --------
+      let s1Emoji = '👀', s1Title = `Move ${moveNum}: Pause & Look`, s1Body = '', s1Tip = '';
+      const s1Arrows = [];
+      const s1Rings = [];
+
+      if (topThreat) {
+        s1Emoji = topThreat.kind === 'mate' ? '🚨' : (topThreat.kind === 'in_check' ? '🛡️' : '⚠️');
+        s1Title = topThreat.headline;
+        s1Body = topThreat.simpleText;
+        realThreats.forEach(th => {
+          s1Arrows.push({ from: th.from, to: th.to, color: 'red' });
+          const tag = th.kind === 'free_piece' ? 'FREE!' : (th.kind === 'mate' ? 'MATE!' : (th.kind === 'in_check' ? 'CHECK!' : '!'));
+          s1Rings.push({ sq: th.to, color: th.kind === 'free_piece' ? 'gold' : 'red', pulse: true, tag });
+        });
+        s1Tip = topThreat.kind === 'free_piece'
+          ? `💡 <b>Easy Rule:</b> Before you move, always ask: <i>"Is any of my pieces unprotected?"</i>`
+          : `💡 <b>Easy Rule:</b> Always check what ${opp} wants to do on their next turn!`;
+      } else if (best.san.includes('#')) {
+        s1Emoji = '👑';
+        s1Title = `Move ${moveNum}: Checkmate Is Hiding!`;
+        s1Body = `${opp}'s King is trapped! Before making a normal move, look for a check that ends the game right now.`;
+        const oppK = findKingSquare(new Chess(st.fenBefore), moverColor === 'w' ? 'b' : 'w');
+        if (oppK) s1Rings.push({ sq: oppK, color: 'gold', pulse: true, tag: 'KING' });
+        s1Tip = `💡 <b>Easy Rule:</b> Always check every <b>Check</b> first—it might be Checkmate!`;
+      } else if (best.captured) {
+        s1Emoji = '🎁';
+        s1Title = `Move ${moveNum}: Free Target on ${best.to}!`;
+        s1Body = `Look closely at ${opp}'s <b>${PNAME[best.captured]} on ${best.to}</b>—${who} had a chance to win material here!`;
+        s1Rings.push({ sq: best.to, color: 'gold', pulse: true, tag: 'TARGET' });
+        s1Tip = `💡 <b>Easy Rule:</b> Scan the board for enemy pieces you can capture safely.`;
+      } else {
+        s1Emoji = '🧠';
+        s1Title = `Move ${moveNum}: Big Choice Here`;
+        s1Body = `There's no immediate danger right now. This is a great moment to make ${whoPoss} pieces safer and stronger.`;
+        s1Tip = `💡 <b>Easy Rule:</b> When nothing is attacked, bring a sleeping piece into the action or protect your King!`;
+      }
+
+      const frame1 = {
+        phaseIdx: 0,
+        emoji: s1Emoji,
+        title: s1Title,
+        bodyHtml: s1Body,
+        tipHtml: s1Tip,
+        stages: [{
+          fen: st.fenBefore,
+          evalCp: st.evalBeforeWhiteCp,
+          arrows: s1Arrows,
+          rings: s1Rings,
+          sound: 'move'
+        }]
+      };
+
+      // -------- STEP 2: WHAT HAPPENED (ANIMATES YOUR MOVE -> OPPONENT PUNISHMENT!) --------
+      const stages2 = [];
+      let s2Emoji = '🔵', s2Title = `${who} Played ${mv.san}`, s2Body = '', s2Tip = '';
+
+      if (kind === 'brilliant') {
+        s2Emoji = '💎';
+        s2Title = `Genius Move: ${mv.san}!!`;
+        const br = st.brilliantInfoV21 && st.brilliantInfoV21.branches && st.brilliantInfoV21.branches[0];
+        s2Body = `${who} offered the <b>${PNAME[mv.piece]} on ${mv.to}</b> on purpose! ${br ? br.plainExplain : `Taking it walks straight into a winning trap!`}`;
+        s2Tip = `🔥 <b>Awesome Find!</b> That's how Grandmasters set traps.`;
+        stages2.push({
+          fen: st.fenBefore, evalCp: st.evalBeforeWhiteCp,
+          arrows: [{ from: mv.from, to: mv.to, color: 'cyan' }], rings: [],
+          delayMs: 550
+        });
+        stages2.push({
+          fen: st.fenAfter, evalCp: st.evalAfterWhiteCp,
+          arrows: [{ from: mv.from, to: mv.to, color: 'cyan' }],
+          rings: [{ sq: mv.to, color: 'cyan', pulse: true, tag: '!!' }],
+          sound: 'brilliant'
+        });
+      } else if (isBadMove) {
+        s2Emoji = '😬';
+        const rep = st.oppBestReply;
+        let fenAfterRep = null;
+        if (rep) {
+          try {
+            const simR = new Chess(st.fenAfter);
+            if (simR.move({ from: rep.from, to: rep.to, promotion: rep.promotion || 'q' })) fenAfterRep = simR.fen();
+          } catch (e) {}
+        }
+
+        if (rep && rep.san.includes('#')) {
+          s2Title = `Oops — Allowed Checkmate!`;
+          s2Body = `${who} played <b>${mv.san}</b>, which let ${opp} play <b>${rep.san}</b> for Checkmate! Watch the red arrow.`;
+        } else if (rep && rep.captured) {
+          const lostName = PNAME[rep.captured];
+          const lostPts = PPTS[rep.captured];
+          s2Title = `Oops — Lost the ${lostName}!`;
+          s2Body = `${who} played <b>${mv.san}</b>, so ${opp}'s <b>${PNAME[rep.piece]}</b> just ate ${whoPoss} <b>${lostName} on ${rep.to}</b> (${lostPts} points)!`;
+        } else if (rep) {
+          s2Title = `Oops — ${mv.san} Gave ${opp} Control`;
+          s2Body = `${who} played <b>${mv.san}</b>, letting ${opp} jump in with <b>${rep.san}</b> (red arrow).`;
+        } else {
+          s2Title = `${who} Played ${mv.san}`;
+          s2Body = `This move dropped the advantage—let's see the easier move on the next step.`;
+        }
+        s2Tip = `👀 Watch the board animate what happens next—click <b>↻ Replay</b> anytime to see it again.`;
+
+        // Stage 2A: Show your move (blue arrow)
+        stages2.push({
+          fen: st.fenAfter,
+          evalCp: st.evalAfterWhiteCp,
+          arrows: rep
+            ? [{ from: mv.from, to: mv.to, color: 'blue', thin: true, opacity: 0.7 }, { from: rep.from, to: rep.to, color: 'red' }]
+            : [{ from: mv.from, to: mv.to, color: 'blue' }],
+          rings: rep ? [{ sq: rep.to, color: 'red', pulse: true, tag: 'OOPS' }] : [],
+          sound: 'wrong',
+          delayMs: 1150
+        });
+
+        // Stage 2B: Actually play the opponent's capture/punishment on the board so the kid SEES it happen!
+        if (fenAfterRep && rep) {
+          stages2.push({
+            fen: fenAfterRep,
+            evalCp: st.evalAfterWhiteCp,
+            arrows: [{ from: rep.from, to: rep.to, color: 'red' }],
+            rings: [{ sq: rep.to, color: 'red', pulse: false, tag: rep.captured ? `-${PPTS[rep.captured]}` : '!' }],
+            sound: rep.captured ? 'capture' : 'check'
+          });
+        }
+      } else {
+        s2Emoji = '👍';
+        s2Title = `Nice Move: ${mv.san}!`;
+        s2Body = `${who} played <b>${mv.san}</b>—a solid move that kept ${whoPoss} pieces working together.`;
+        s2Tip = `✅ Great job staying sharp here!`;
+        stages2.push({
+          fen: st.fenAfter,
+          evalCp: st.evalAfterWhiteCp,
+          arrows: [{ from: mv.from, to: mv.to, color: 'green' }],
+          rings: [{ sq: mv.to, color: 'green', pulse: false }],
+          sound: mv.captured ? 'capture' : 'move'
+        });
+      }
+
+      const frame2 = {
+        phaseIdx: 1,
+        emoji: s2Emoji,
+        title: s2Title,
+        bodyHtml: s2Body,
+        tipHtml: s2Tip,
+        stages: stages2
+      };
+
+      // -------- STEP 3: THE EASY FIX (ANIMATES THE BETTER GREEN-ARROW MOVE!) --------
+      let fenFix = st.fenBefore;
+      try {
+        const simF = new Chess(st.fenBefore);
+        if (simF.move({ from: best.from, to: best.to, promotion: best.promotion || 'q' })) fenFix = simF.fen();
+      } catch (e) {}
+
+      let s3Title = `Easy Fix: Play ${best.san}!`, s3Body = '', s3Tip = '';
+      if (best.san === mv.san) {
+        s3Title = `You Already Found It (${best.san})!`;
+        s3Body = `<b>${best.san}</b> really was the strongest move on the board!`;
+        s3Tip = `🌟 Keep looking for moves just like this.`;
+      } else if (best.san.includes('#')) {
+        s3Title = `Instant Win: ${best.san}!`;
+        s3Body = `Just move your <b>${PNAME[best.piece]} to ${best.to}</b>—that's <b>Checkmate</b> and you win on the spot!`;
+        s3Tip = `👑 Always look for Checkmate before making a quiet move.`;
+      } else if (topThreat && topThreat.kind === 'free_piece' && best.from === topThreat.to) {
+        s3Title = `Save the ${PNAME[best.piece]}! (${best.san})`;
+        s3Body = `Instead of ${mv.san}, just move your <b>${PNAME[best.piece]} from ${best.from} to ${best.to}</b>! Now ${opp} can't eat it for free.`;
+        s3Tip = `🛡️ Rule: When a piece is unprotected, move it to safety or guard it!`;
+      } else if (best.captured) {
+        s3Title = `Take the Free ${PNAME[best.captured]}! (${best.san})`;
+        s3Body = `Move your <b>${PNAME[best.piece]} to ${best.to}</b> to capture their <b>${PNAME[best.captured]}</b> cleanly!`;
+        s3Tip = `🎁 Free pieces win games fast!`;
+      } else if (best.san === 'O-O' || best.san === 'O-O-O') {
+        s3Title = `Castle Your King! (${best.san})`;
+        s3Body = `Tuck your King safely into the corner with <b>${best.san}</b> and wake up your Rook at the same time!`;
+        s3Tip = `🏰 Safe King = way easier game.`;
+      } else {
+        s3Title = `Better Move: ${PNAME[best.piece]} to ${best.to} (${best.san})`;
+        s3Body = `Moving your <b>${PNAME[best.piece]} from ${best.from} → ${best.to}</b> keeps your pieces safe and puts pressure back on ${opp}!`;
+        s3Tip = `✅ Follow the green arrow to see how clean the board looks.`;
+      }
+
+      const frame3 = {
+        phaseIdx: 2,
+        emoji: '✅',
+        title: s3Title,
+        bodyHtml: s3Body,
+        tipHtml: s3Tip,
+        stages: [
+          {
+            fen: st.fenBefore,
+            evalCp: st.evalBeforeWhiteCp,
+            arrows: [{ from: best.from, to: best.to, color: 'green' }],
+            rings: [{ sq: best.to, color: 'green', pulse: true, tag: 'BEST' }],
+            delayMs: 900
+          },
+          {
+            fen: fenFix,
+            evalCp: st.evalBeforeWhiteCp,
+            arrows: [{ from: best.from, to: best.to, color: 'green' }],
+            rings: [{ sq: best.to, color: 'green', pulse: false, tag: 'SAFE' }],
+            sound: best.captured ? 'capture' : 'move'
+          }
+        ]
+      };
+
+      addGroup(`Moment ${mNumIdx + 1}`, [frame1, frame2, frame3]);
+    });
+
+    // ==================== 3. ONE SIMPLE GOAL FOR NEXT GAME ====================
+    const myCastled = mySide === 'w' ? stats.wCastled : stats.bCastled;
+    let oneGoal = `Before every move, pause 2 seconds and ask: <b>"Are any of my pieces free to be eaten?"</b>`;
+    if (freePieceMistakes > 0) {
+      oneGoal = `You left a piece unprotected in this game. Next game, do a <b>2-second safety check</b> before every move—you'll jump 200+ ELO fast!`;
+    } else if (!myCastled && timeline.length >= 12) {
+      oneGoal = `Next game, try to <b>Castle within your first 8 moves</b> so your King stays tucked away and safe!`;
+    } else if (myAcc >= 82) {
+      oneGoal = `You played super clean (${myAcc}%)! Next game, try pushing one tier higher on Coach Magnus to sharpen your tactics.`;
+    }
+
+    addGroup('Goal', [{
+      emoji: '🏆',
+      title: '1 Simple Rule for Next Game',
+      bodyHtml: oneGoal,
+      tipHtml: isDual
+        ? `⚔️ Ready for a rematch between <b>${wName}</b> and <b>${bName}</b>?`
+        : `🚀 Every game you review like this makes you spot danger way faster!`,
+      stages: [{
+        fen: timeline[timeline.length - 1].fenAfter,
+        evalCp: timeline[timeline.length - 1].evalAfterWhiteCp || 0,
+        arrows: [], rings: [], sound: 'levelup'
+      }],
+      cta: isCustom
+        ? {
+            label: '↺ Try This Custom Position Again ▶',
+            onClick: () => {
+              closeV37Video();
+              game.load(customStartFen);
+              window._savedCoachMatchFen = customStartFen;
+              timeline = [];
+              viewPlyIndex = -1;
+              window._isCoachMatchRunning = true;
+              isGameActive = true;
+              window.activateSidebarTab('coach');
+              window.renderBoard();
+            }
+          }
+        : (openMatch ? {
+            label: `📘 Practice ${openMatch.lesson.title.replace(/^\d+\.\s*/, '')} ▶`,
+            onClick: () => jumpToLessonV37(openMatch.idx)
+          } : null)
+    }]);
+
+    return { groups, frames };
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. SIMPLE VIDEO PLAYER ENGINE (ANIMATED STAGES + REPLAY + CALM AUTO-PLAY)
+  // -------------------------------------------------------------------------
+  let v37Story = null;
+  let v37Idx = 0;
+  let v37Open = false;
+  let v37Auto = true;
+  let v37HoverPaused = false;
+  let v37StageTimer = null;
+  let v37TickTimer = null;
+  let v37Elapsed = 0;
+  let v37Duration = 8500;
+
+  function clearV37Timers() {
+    if (v37StageTimer) { clearTimeout(v37StageTimer); v37StageTimer = null; }
+    if (v37TickTimer) { clearInterval(v37TickTimer); v37TickTimer = null; }
+  }
+
+  function ensureV37PanelDom() {
+    const sidebar = document.getElementById('activeGameSidebarView');
+    if (!sidebar) return null;
+    if (getComputedStyle(sidebar).position === 'static') sidebar.style.position = 'relative';
+
+    let panel = document.getElementById('v37VideoPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'v37VideoPanel';
+      panel.className = 'hidden';
+      panel.innerHTML = `
+        <!-- Simple Clean Header -->
+        <div class="flex items-center justify-between px-3.5 py-2.5 bg-[#151412] border-b border-white/10 flex-shrink-0">
+          <div class="flex items-center gap-2">
+            <span class="text-base">🎓</span>
+            <div>
+              <div class="text-xs font-extrabold text-white">Coach Breakdown</div>
+              <div id="v37CounterTxt" class="text-[10.5px] font-semibold text-[#9e9c99]">Step 1 of 1</div>
+            </div>
+          </div>
+          <button id="v37CloseBtn" type="button" class="px-2.5 py-1 rounded-lg bg-[#2b2926] hover:bg-[#ca3431] text-white text-xs font-bold border border-white/10 transition">✕ Close</button>
+        </div>
+
+        <!-- Simple Moment Pills -->
+        <div id="v37MomentNav" class="v37-moment-nav"></div>
+
+        <!-- Main Uncluttered Story Card -->
+        <div id="v37ScrollBody" class="flex-1 overflow-y-auto p-3.5 space-y-3">
+          <div id="v37PhaseDotsWrap"></div>
+
+          <div class="v37-story-card">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span id="v37Emoji" class="text-xl flex-shrink-0">👀</span>
+                <h3 id="v37Title" class="text-[15px] font-extrabold text-white leading-snug"></h3>
+              </div>
+              <button id="v37ReplayAnimBtn" type="button" class="hidden px-2.5 py-1 rounded-lg bg-[#32b8e6]/15 hover:bg-[#32b8e6]/30 border border-[#32b8e6]/40 text-[#8ee2ff] text-[10.5px] font-bold flex-shrink-0 transition">
+                ↻ Replay
+              </button>
+            </div>
+            <div id="v37BodyText" class="text-[13px] leading-relaxed text-[#eceae6]"></div>
+            <div id="v37TipBox" class="v37-tip-box"></div>
+          </div>
+
+          <div id="v37CtaBox" class="hidden"></div>
+
+          <div id="v37PausedHint" class="hidden text-center text-[11px] font-semibold text-[#f7c045]">
+            ⏸ Paused while you read
+          </div>
+        </div>
+
+        <!-- Simple 3-Color Key -->
+        <div class="flex items-center justify-center gap-4 py-1.5 px-3 bg-[#151412] border-t border-white/10 text-[10.5px] font-bold text-[#b5b3b0] flex-shrink-0">
+          <span><span style="color:#ef4444;">●</span> Danger</span>
+          <span><span style="color:#32b8e6;">●</span> Played</span>
+          <span><span style="color:#81b64c;">●</span> Better Move</span>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="w-full h-[3px] bg-[#2b2926] flex-shrink-0 overflow-hidden">
+          <div id="v37ProgFill" class="h-full bg-[#81b64c] transition-all duration-75" style="width:0%"></div>
+        </div>
+
+        <!-- Big Easy Buttons -->
+        <div class="grid grid-cols-3 gap-2 p-3 bg-[#151412] border-t border-white/10 flex-shrink-0">
+          <button id="v37PrevBtn" type="button" class="v37-btn">← Back</button>
+          <button id="v37AutoBtn" type="button" class="v37-btn">⏸ Pause</button>
+          <button id="v37NextBtn" type="button" class="v37-btn next-primary">Next →</button>
+        </div>
+      `;
+      sidebar.appendChild(panel);
+
+      panel.querySelector('#v37CloseBtn').addEventListener('click', closeV37Video);
+      panel.querySelector('#v37PrevBtn').addEventListener('click', () => playV37Frame(v37Idx - 1));
+      panel.querySelector('#v37NextBtn').addEventListener('click', () => {
+        if (!v37Story) return;
+        if (v37Idx < v37Story.frames.length - 1) playV37Frame(v37Idx + 1);
+        else closeV37Video();
+      });
+      panel.querySelector('#v37AutoBtn').addEventListener('click', () => {
+        if (!v37Story) return;
+        if (!v37Auto && v37Idx >= v37Story.frames.length - 1) {
+          v37Auto = true;
+          playV37Frame(0);
+          return;
+        }
+        v37Auto = !v37Auto;
+        syncV37AutoBtn();
+      });
+      panel.querySelector('#v37ReplayAnimBtn').addEventListener('click', () => {
+        if (!v37Story || !v37Story.frames[v37Idx]) return;
+        runFrameStagesV37(v37Story.frames[v37Idx], true);
+      });
+
+      const bodyArea = panel.querySelector('#v37ScrollBody');
+      bodyArea.addEventListener('mouseenter', () => {
+        v37HoverPaused = true;
+        if (v37Auto) document.getElementById('v37PausedHint')?.classList.remove('hidden');
+      });
+      bodyArea.addEventListener('mouseleave', () => {
+        v37HoverPaused = false;
+        document.getElementById('v37PausedHint')?.classList.add('hidden');
+      });
+    }
+    return panel;
+  }
+
+  function syncV37AutoBtn() {
+    const btn = document.getElementById('v37AutoBtn');
+    if (!btn || !v37Story) return;
+    if (!v37Auto && v37Idx >= v37Story.frames.length - 1) btn.textContent = '↻ Replay';
+    else btn.textContent = v37Auto ? '⏸ Pause' : '▶ Play';
+  }
+
+  function applyStageOnBoardV37(stage) {
+    if (!stage) return;
+    window.demoOverrideFen = stage.fen || null;
+    window.activeHintMove = null;
+    window.lessonClueSq = null;
+    window.lessonRefutationArrow = null;
+    if (window._isTwoPlayerLocalMode || window._isOnlineMatch) boardFlipped = false;
+
+    window.renderBoard();
+    if (typeof stage.evalCp === 'number' && typeof updateEvalBarUI === 'function') {
+      try { updateEvalBarUI(stage.evalCp); } catch (e) {}
+    }
+    drawV37BoardGraphics(stage.arrows || [], stage.rings || []);
+    if (stage.sound) { try { playChessSound(stage.sound); } catch (e) {} }
+  }
+
+  function runFrameStagesV37(frame, isManualReplay = false) {
+    if (v37StageTimer) { clearTimeout(v37StageTimer); v37StageTimer = null; }
+    const stages = frame.stages || [];
+    if (stages.length === 0) return;
+
+    const showStage = (sIdx) => {
+      if (!v37Open || !v37Story || v37Story.frames[v37Idx] !== frame) return;
+      const stg = stages[sIdx];
+      applyStageOnBoardV37(stg);
+      if (sIdx < stages.length - 1) {
+        v37StageTimer = setTimeout(() => showStage(sIdx + 1), stg.delayMs || 950);
+      } else if (!isManualReplay) {
+        startV37Countdown(frame);
+      }
+    };
+    showStage(0);
+  }
+
+  function startV37Countdown(frame) {
+    if (v37TickTimer) { clearInterval(v37TickTimer); v37TickTimer = null; }
+    const plain = `${frame.bodyHtml || ''} ${frame.tipHtml || ''}`.replace(/<[^>]+>/g, ' ').trim();
+    const words = plain ? plain.split(/\s+/).length : 15;
+    // Calm, comfortable reading pace (~7.5s to 11.5s AFTER animation finishes!)
+    v37Duration = Math.min(12000, Math.max(7200, words * 230));
+    v37Elapsed = 0;
+
+    const fill = document.getElementById('v37ProgFill');
+    if (fill) fill.style.width = '0%';
+
+    v37TickTimer = setInterval(() => {
+      if (!v37Open) { clearV37Timers(); return; }
+      if (!v37Auto || v37HoverPaused) return;
+      v37Elapsed += 80;
+      if (fill) fill.style.width = `${Math.min(100, (v37Elapsed / v37Duration) * 100)}%`;
+      if (v37Elapsed >= v37Duration) {
+        clearInterval(v37TickTimer);
+        v37TickTimer = null;
+        if (v37Idx < v37Story.frames.length - 1) {
+          playV37Frame(v37Idx + 1);
+        } else {
+          v37Auto = false;
+          syncV37AutoBtn();
+        }
+      }
+    }, 80);
+  }
+
+  function playV37Frame(idx) {
+    if (!v37Story || !v37Story.frames.length) return;
+    clearV37Timers();
+    v37Idx = Math.max(0, Math.min(v37Story.frames.length - 1, idx));
+    const fr = v37Story.frames[v37Idx];
+    const grp = v37Story.groups[fr.groupIdx];
+
+    // Update top counter & Moment Nav pills
+    document.getElementById('v37CounterTxt').textContent = `Step ${v37Idx + 1} of ${v37Story.frames.length}`;
+    const nav = document.getElementById('v37MomentNav');
+    if (nav) {
+      nav.innerHTML = '';
+      v37Story.groups.forEach((g, gi) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `v37-m-btn ${gi === fr.groupIdx ? 'active' : ''}`;
+        b.textContent = g.label;
+        b.addEventListener('click', () => playV37Frame(g.frames[0]));
+        nav.appendChild(b);
+      });
+    }
+
+    // Update 3-step visual tabs (1. Danger | 2. Played | 3. Easy Fix) for Moment chapters
+    const dotsWrap = document.getElementById('v37PhaseDotsWrap');
+    if (dotsWrap) {
+      if (grp && grp.frames.length === 3) {
+        const meta = [
+          { lbl: '👀 1. Danger',   cls: 'active-red' },
+          { lbl: '⚡ 2. Played',   cls: 'active-blue' },
+          { lbl: '✅ 3. Easy Fix', cls: 'active-green' }
+        ];
+        dotsWrap.innerHTML = `<div class="v37-step-dots">${meta.map((m, mi) => {
+          const fIdx = grp.frames[mi];
+          const on = (fIdx === v37Idx);
+          return `<button type="button" data-f="${fIdx}" class="v37-dot-pill ${on ? m.cls : ''}">${m.lbl}</button>`;
+        }).join('')}</div>`;
+        dotsWrap.querySelectorAll('button[data-f]').forEach(btn => {
+          btn.addEventListener('click', () => playV37Frame(parseInt(btn.dataset.f, 10)));
+        });
+      } else {
+        dotsWrap.innerHTML = '';
+      }
+    }
+
+    // Populate clean story card
+    document.getElementById('v37Emoji').textContent = fr.emoji || '♟️';
+    document.getElementById('v37Title').textContent = fr.title || '';
+    document.getElementById('v37BodyText').innerHTML = fr.bodyHtml || '';
+
+    const tipBox = document.getElementById('v37TipBox');
+    if (tipBox) {
+      tipBox.innerHTML = fr.tipHtml || '';
+      tipBox.classList.toggle('hidden', !fr.tipHtml);
+    }
+
+    // Show "↻ Replay" button whenever this step has a live board animation!
+    const repBtn = document.getElementById('v37ReplayAnimBtn');
+    if (repBtn) repBtn.classList.toggle('hidden', !(fr.stages && fr.stages.length > 1));
+
+    // Optional CTA button
+    const ctaBox = document.getElementById('v37CtaBox');
+    if (ctaBox) {
+      ctaBox.innerHTML = '';
+      if (fr.cta && fr.cta.label) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'w-full py-2.5 px-3 rounded-xl bg-[#32b8e6] hover:bg-[#49c6f0] text-[#141311] font-extrabold text-xs shadow transition';
+        b.textContent = fr.cta.label;
+        b.addEventListener('click', fr.cta.onClick);
+        ctaBox.appendChild(b);
+        ctaBox.classList.remove('hidden');
+      } else {
+        ctaBox.classList.add('hidden');
+      }
+    }
+
+    document.getElementById('v37PrevBtn').disabled = (v37Idx <= 0);
+    document.getElementById('v37NextBtn').textContent = (v37Idx >= v37Story.frames.length - 1) ? 'Done ✓' : 'Next →';
+    document.getElementById('v37ProgFill').style.width = '0%';
+    syncV37AutoBtn();
+
+    // Run board stages (plays animation on multi-stage frames, then starts calm countdown!)
+    runFrameStagesV37(fr, false);
+  }
+
+  function closeV37Video() {
+    if (!v37Open) return;
+    v37Open = false;
+    clearV37Timers();
+    clearV37Graphics();
+    document.getElementById('v37VideoPanel')?.classList.add('hidden');
+    window.demoOverrideFen = null;
+    if (timeline && timeline.length > 0) {
+      viewPlyIndex = timeline.length - 1;
+      if (typeof updateEvalBarUI === 'function') {
+        try { updateEvalBarUI(timeline[viewPlyIndex].evalAfterWhiteCp || 0); } catch (e) {}
+      }
+    }
+    window.renderBoard();
+  }
+
+  function openV37Video() {
+    if (typeof stopDemoPlayback === 'function') { try { stopDemoPlayback(); } catch (e) {} }
+    document.getElementById('gameOverRatingModal')?.classList.add('hidden');
+    document.getElementById('v23TwoPlayerResultModal')?.classList.add('hidden');
+    document.getElementById('hoverCoachStage')?.classList.add('hidden');
+    document.getElementById('descriptiveVideoOverlay')?.classList.add('hidden');
+
+    document.body.classList.remove('fair-play-match-live', 'two-player-blind-live', 'coach-challenging-live');
+    window._isFairPlayMatchLive = false;
+
+    window.activateSidebarTab('review');
+    const panel = ensureV37PanelDom();
+    if (!panel) return;
+
+    v37Story = buildSimpleStoryV37();
+    v37Auto = true;
+    v37HoverPaused = false;
+    v37Open = true;
+    panel.classList.remove('hidden');
+    playV37Frame(0);
+  }
+
+  // Keep arrows aligned on window resize & support Left/Right/Space/Esc keys
+  window.addEventListener('resize', () => {
+    if (!v37Open || !v37Story || !v37Story.frames[v37Idx]) return;
+    const fr = v37Story.frames[v37Idx];
+    const lastStg = fr.stages && fr.stages[fr.stages.length - 1];
+    if (lastStg) drawV37BoardGraphics(lastStg.arrows || [], lastStg.rings || []);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (!v37Open) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (v37Story && v37Idx < v37Story.frames.length - 1) playV37Frame(v37Idx + 1);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (v37Idx > 0) playV37Frame(v37Idx - 1);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      v37Auto = !v37Auto;
+      syncV37AutoBtn();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeV37Video();
+    }
+  });
+
+  // Cleanly close V37 when switching away from Review tab
+  const prevActivateV37 = window.activateSidebarTab;
+  window.activateSidebarTab = function(tabName) {
+    if (v37Open && tabName !== 'review') closeV37Video();
+    if (prevActivateV37) prevActivateV37(tabName);
+  };
+
+  // Override startDescriptiveVideoShow & seamlessly hand off if V36's click listener opens #v36FilmRoomPanel!
+  window.startDescriptiveVideoShow = openV37Video;
+
+  const sidebarRoot = document.getElementById('activeGameSidebarView');
+  if (sidebarRoot && typeof MutationObserver !== 'undefined') {
+    const handoffObs = new MutationObserver(() => {
+      const v36Panel = document.getElementById('v36FilmRoomPanel');
+      if (v36Panel && !v36Panel.classList.contains('hidden')) {
+        // Cleanly shut down V36 (stops its timer & keyboard handler) and open V37 instead!
+        v36Panel.querySelector('#v36CloseFilmBtn')?.click();
+        v36Panel.classList.add('hidden');
+        openV37Video();
+      }
+    });
+    handoffObs.observe(sidebarRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  }
+})();
+</script>
 </html>
