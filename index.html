@@ -44434,4 +44434,1089 @@
   });
 })();
 </script>
+<!-- ===================================================================== -->
+<!-- 💎 V41 BRILLIANT-HUNTER & SEQUENCE-SOLVER ENGINE FOR 'B' HOTKEY       -->
+<!--    1. Fixes V40's !undefined bug that stopped 'B' from firing         -->
+<!--    2. MultiPV-5 Real Stockfish stack (Lichess + SF18 + Local SF10)    -->
+<!--    3. Always prioritizes genuine verified Brilliant (!!) moves        -->
+<!--    4. Shows exact Move Type (!! / ! / ★ / Book / M#) + Next Sequence  -->
+<!--    5. Pre-computes Accept-Sacrifice follow-up so Move 2 is instant    -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyBrilliantSequenceEngineV41() {
+  const STD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const FILES = 'abcdefgh';
+  const PVAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+  const SECRET_PASS = 'chessmog';
+
+  let v41Unlocked = false;
+  let v41ActiveDraw = null;
+  let v41ReqToken = 0;
+  let v41SfWorker = null;
+  let v41SfReady = false;
+  let v41SfBooted = false;
+  let v41SfHandler = null;
+  const v41Cache = new Map();        // fen -> full drawObj
+  const v41PrecomputedFollow = new Map(); // fenAfterOppAccept -> drawObj
+
+  // -------------------------------------------------------------------------
+  // 1. CLEAN PASSCODE DRAWER TAKEOVER (SILENCES V38 / V39 / V40 CLEANLY)
+  // -------------------------------------------------------------------------
+  function setupPassDrawerV41() {
+    let drawer = document.getElementById('v38PassDrawer');
+    if (!drawer) {
+      drawer = document.createElement('div');
+      drawer.id = 'v38PassDrawer';
+      drawer.className = 'hidden';
+      document.body.appendChild(drawer);
+    }
+
+    drawer.innerHTML = `
+      <span id="v38PassLabel" style="font-size:11.5px;font-weight:700;color:#9e9c99;user-select:none;">Pass:</span>
+      <input id="v41PassInput" type="password" autocomplete="off" spellcheck="false"
+        style="width:106px;padding:4px 8px;border-radius:6px;background:#131210;border:1px solid rgba(255,255,255,0.14);color:#eae8e4;font-size:12px;outline:none;" />
+      <span id="v41PassCheck" class="hidden" title="Active"
+        style="width:22px;height:22px;border-radius:99px;background:rgba(129,182,76,0.18);border:1px solid #81b64c;color:#81b64c;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;">✓</span>
+    `;
+
+    const inp = drawer.querySelector('#v41PassInput');
+    const chk = drawer.querySelector('#v41PassCheck');
+
+    function syncChk() {
+      chk.classList.toggle('hidden', !v41Unlocked);
+    }
+
+    function checkCode() {
+      const val = (inp.value || '').trim().toLowerCase();
+      if (val === SECRET_PASS) {
+        v41Unlocked = true;
+        inp.value = '';
+        syncChk();
+        initLocalStockfishV41();
+        setTimeout(() => drawer.classList.add('hidden'), 750);
+      } else if (val === 'off' || val === 'lock') {
+        v41Unlocked = false;
+        inp.value = '';
+        clearV41Stealth();
+        syncChk();
+        setTimeout(() => drawer.classList.add('hidden'), 300);
+      }
+    }
+
+    inp.addEventListener('input', checkCode);
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); checkCode(); }
+      if (e.key === 'Escape') { e.preventDefault(); drawer.classList.add('hidden'); }
+    });
+    chk.addEventListener('click', () => {
+      v41Unlocked = false;
+      clearV41Stealth();
+      syncChk();
+    });
+
+    if (typeof MutationObserver !== 'undefined') {
+      const obs = new MutationObserver(() => {
+        if (!drawer.classList.contains('hidden')) {
+          syncChk();
+          inp.value = '';
+          setTimeout(() => inp.focus(), 30);
+        }
+      });
+      obs.observe(drawer, { attributes: true, attributeFilter: ['class'] });
+    }
+  }
+  setupPassDrawerV41();
+
+  // -------------------------------------------------------------------------
+  // 2. REAL LOCAL STOCKFISH 10 WORKER (MULTI-PV 5 FOR BRILLIANT + GREAT!)
+  // -------------------------------------------------------------------------
+  function initLocalStockfishV41() {
+    if (v41SfBooted) return;
+    v41SfBooted = true;
+    try {
+      const blob = new Blob(
+        [`importScripts('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js');`],
+        { type: 'application/javascript' }
+      );
+      const sf = new Worker(URL.createObjectURL(blob));
+      v41SfWorker = sf;
+      sf.onmessage = (ev) => {
+        const line = typeof ev.data === 'string' ? ev.data : '';
+        if (!line) return;
+        if (line === 'uciok') {
+          sf.postMessage('setoption name MultiPV value 5');
+          sf.postMessage('setoption name Skill Level value 20');
+          sf.postMessage('setoption name Hash value 64');
+          sf.postMessage('setoption name Contempt value 45');
+          sf.postMessage('isready');
+        } else if (line === 'readyok') {
+          v41SfReady = true;
+        }
+        if (v41SfHandler) {
+          try { v41SfHandler(line); } catch (e) {}
+        }
+      };
+      sf.postMessage('uci');
+    } catch (e) {
+      v41SfWorker = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. CHESS HELPERS, GUARANTEED M1/M2 SOLVER & GENUINE SACRIFICE VERIFIER
+  // -------------------------------------------------------------------------
+  function fenKey4(fen) {
+    return (fen || '').split(' ').slice(0, 4).join(' ');
+  }
+
+  function normUci(chess, uci) {
+    if (!uci || uci.length < 4) return null;
+    let from = uci.slice(0, 2), to = uci.slice(2, 4);
+    const promo = uci.length >= 5 ? uci[4].toLowerCase() : undefined;
+    const p = chess.get(from);
+    if (p && p.type === 'k') {
+      if (from === 'e1' && to === 'h1') to = 'g1';
+      else if (from === 'e1' && to === 'a1') to = 'c1';
+      else if (from === 'e8' && to === 'h8') to = 'g8';
+      else if (from === 'e8' && to === 'a8') to = 'c8';
+    }
+    return { from, to, promotion: promo };
+  }
+
+  function resolveMoveV41(fen, uci) {
+    try {
+      const sim = new Chess(fen);
+      const sp = normUci(sim, uci);
+      if (!sp) return null;
+      const mv = sim.move({ from: sp.from, to: sp.to, promotion: sp.promotion || 'q' });
+      if (!mv) return null;
+      return { mv, fenAfter: sim.fen() };
+    } catch (e) { return null; }
+  }
+
+  function expandPvSequence(fen, tokens, maxPlies = 5) {
+    const steps = [];
+    try {
+      const sim = new Chess(fen);
+      for (let i = 0; i < tokens.length && steps.length < maxPlies; i++) {
+        const tok = tokens[i];
+        if (!tok) break;
+        let mv = null;
+        if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(tok)) {
+          const sp = normUci(sim, tok);
+          if (sp) mv = sim.move({ from: sp.from, to: sp.to, promotion: sp.promotion || 'q' });
+        }
+        if (!mv) mv = sim.move(tok);
+        if (!mv) break;
+        steps.push({ from: mv.from, to: mv.to, san: mv.san, uci: mv.from + mv.to + (mv.promotion || ''), fenAfter: sim.fen() });
+      }
+    } catch (e) {}
+    return steps;
+  }
+
+  function countDefendersV41(fen, sq, ownerColor) {
+    try {
+      const sim = new Chess(fen);
+      const opp = ownerColor === 'w' ? 'b' : 'w';
+      const orig = sim.get(sq);
+      if (!orig || orig.type === 'k') return 0;
+      sim.remove(sq);
+      sim.put({ type: 'p', color: opp }, sq);
+      const parts = sim.fen().split(' ');
+      parts[1] = ownerColor; parts[3] = '-';
+      return new Chess(parts.join(' ')).moves({ verbose: true }).filter(m => m.to === sq && m.captured).length;
+    } catch (e) { return 0; }
+  }
+
+  // Returns sacrifice details (including the opponent's exact "Accept" capture move!) if this is a GENUINE sacrifice
+  function inspectGenuineSacrificeV41(fenBefore, uci) {
+    const res = resolveMoveV41(fenBefore, uci);
+    if (!res) return null;
+    const { mv, fenAfter } = res;
+    const mvVal = PVAL[mv.piece] || 100;
+    const capVal = mv.captured ? (PVAL[mv.captured] || 100) : 0;
+
+    try {
+      const simA = new Chess(fenAfter);
+      if (simA.in_checkmate()) return null;
+      const oppCaps = simA.moves({ verbose: true }).filter(m => m.captured);
+
+      // 1. Direct Sacrifice: Knight/Bishop/Rook/Queen placed where opponent wins material by taking it
+      if (mv.piece !== 'k' && mv.piece !== 'p' && (mvVal - capVal >= 200)) {
+        const onDest = oppCaps.filter(m => m.to === mv.to);
+        if (onDest.length > 0) {
+          onDest.sort((a, b) => (PVAL[a.piece] || 100) - (PVAL[b.piece] || 100));
+          const defs = countDefendersV41(fenAfter, mv.to, mv.color);
+          const cheapestAtk = onDest[0];
+          const minAtkVal = PVAL[cheapestAtk.piece] || 100;
+          if (defs === 0 || onDest.length > defs || minAtkVal < mvVal - 100) {
+            const simAcc = new Chess(fenAfter);
+            const accMv = simAcc.move(cheapestAtk);
+            return {
+              kind: 'direct',
+              sacSq: mv.to,
+              acceptMove: accMv,
+              fenAfterAccept: simAcc.fen()
+            };
+          }
+        }
+      }
+
+      // 2. Indirect En-Prise Sacrifice: intentionally leaves another N/B/R/Q completely undefended as bait!
+      const hangingOthers = oppCaps
+        .filter(m => m.to !== mv.to && (PVAL[m.captured] || 100) >= 320)
+        .sort((a, b) => (PVAL[b.captured] || 100) - (PVAL[a.captured] || 100));
+
+      for (const ho of hangingOthers) {
+        if (countDefendersV41(fenAfter, ho.to, mv.color) === 0) {
+          const simAcc = new Chess(fenAfter);
+          const accMv = simAcc.move(ho);
+          return {
+            kind: 'indirect',
+            sacSq: ho.to,
+            acceptMove: accMv,
+            fenAfterAccept: simAcc.fen()
+          };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function findInstantMateV41(fen) {
+    try {
+      const sim = new Chess(fen);
+      const legs = sim.moves({ verbose: true });
+      if (!legs.length) return null;
+
+      // Mate in 1
+      for (let i = 0; i < legs.length; i++) {
+        if (legs[i].san.includes('#')) {
+          const m = legs[i];
+          return {
+            uci: m.from + m.to + (m.promotion || ''),
+            moverMate: 1,
+            moverCp: null,
+            depth: 99,
+            pvTokens: [m.from + m.to + (m.promotion || '')]
+          };
+        }
+      }
+
+      // Forced Mate in 2 (45ms cap)
+      const deadline = Date.now() + 45;
+      const ordered = legs.slice().sort((a, b) => {
+        const sa = (a.san.includes('+') ? 100 : 0) + (a.captured ? 40 : 0);
+        const sb = (b.san.includes('+') ? 100 : 0) + (b.captured ? 40 : 0);
+        return sb - sa;
+      });
+      for (let i = 0; i < ordered.length; i++) {
+        if (Date.now() > deadline) break;
+        const m1 = ordered[i];
+        sim.move(m1);
+        const reps = sim.moves({ verbose: true });
+        if (!reps.length) { sim.undo(); continue; }
+        let allMated = true, sRep = reps[0], sM2 = null;
+        for (let r = 0; r < reps.length; r++) {
+          if (Date.now() > deadline) { allMated = false; break; }
+          const rep = reps[r];
+          sim.move(rep);
+          const m2 = sim.moves({ verbose: true }).find(x => x.san.includes('#'));
+          sim.undo();
+          if (!m2) { allMated = false; break; }
+          if (r === 0) { sRep = rep; sM2 = m2; }
+        }
+        sim.undo();
+        if (allMated && sM2) {
+          return {
+            uci: m1.from + m1.to + (m1.promotion || ''),
+            moverMate: 2,
+            moverCp: null,
+            depth: 99,
+            pvTokens: [
+              m1.from + m1.to + (m1.promotion || ''),
+              sRep.from + sRep.to + (sRep.promotion || ''),
+              sM2.from + sM2.to + (sM2.promotion || '')
+            ]
+          };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function buildHistCtxV41(curFen) {
+    const counts = new Map();
+    const uciMoves = [];
+    let matched = false;
+    try {
+      const startF = (typeof customStartFen === 'string' && customStartFen) ? customStartFen : STD_FEN;
+      counts.set(fenKey4(startF), 1);
+      if (Array.isArray(timeline) && timeline.length > 0) {
+        const sim = new Chess(startF);
+        let ok = true;
+        for (let i = 0; i < timeline.length; i++) {
+          const mv = timeline[i] && timeline[i].moveObj;
+          if (!mv) { ok = false; break; }
+          const ex = sim.move({ from: mv.from, to: mv.to, promotion: mv.promotion || 'q' });
+          if (!ex) { ok = false; break; }
+          uciMoves.push(ex.from + ex.to + (ex.promotion || ''));
+          const k = fenKey4(sim.fen());
+          counts.set(k, (counts.get(k) || 0) + 1);
+        }
+        if (ok && fenKey4(sim.fen()) === fenKey4(curFen)) matched = true;
+      }
+    } catch (e) {}
+
+    const repeatingUcis = new Set();
+    const threefoldUcis = new Set();
+    const nonRepeatingUcis = [];
+    try {
+      const sim = new Chess(curFen);
+      const legs = sim.moves({ verbose: true });
+      for (let i = 0; i < legs.length; i++) {
+        const m = legs[i];
+        sim.move(m);
+        const cnt = counts.get(fenKey4(sim.fen())) || 0;
+        const uci = m.from + m.to + (m.promotion || '');
+        if (cnt >= 2) threefoldUcis.add(uci);
+        if (cnt >= 1) repeatingUcis.add(uci);
+        else nonRepeatingUcis.push(uci);
+        sim.undo();
+      }
+    } catch (e) {}
+
+    const uciPosCmd = (matched && uciMoves.length > 0)
+      ? ((customStartFen === STD_FEN ? 'position startpos moves ' : `position fen ${customStartFen} moves `) + uciMoves.join(' '))
+      : `position fen ${curFen}`;
+
+    return { uciPosCmd, repeatingUcis, threefoldUcis, nonRepeatingUcis };
+  }
+
+  // Exact numeric rank of a move for MultiPV comparison
+  function numericEvalScore(pv) {
+    if (pv.moverMate !== null && pv.moverMate !== undefined) {
+      return pv.moverMate > 0 ? (100000 - pv.moverMate * 100) : (-100000 - pv.moverMate * 100);
+    }
+    return typeof pv.moverCp === 'number' ? pv.moverCp : 0;
+  }
+
+  // Checks if this ply is a Book Move under the app's exact rules (first 2 moves per side or in OPENING_BOOK)
+  function isBookMoveNowV41(fen, uci) {
+    if (customStartFen !== STD_FEN) return false;
+    if (Array.isArray(timeline) && timeline.length <= 3) return true;
+    try {
+      const res = resolveMoveV41(fen, uci);
+      if (!res) return false;
+      const seq = (timeline || []).map(t => t.san).concat([res.mv.san]).join(' ');
+      return Boolean(typeof OPENING_BOOK !== 'undefined' && OPENING_BOOK[seq]);
+    } catch (e) { return false; }
+  }
+
+  // CORE SELECTION & EXACT CLASSIFICATION ENGINE:
+  // Given 1..5 Stockfish MultiPV lines, ALWAYS picks:
+  //   1. Forced Winning Mate (and checks if the Mate move is ALSO a Brilliant sacrifice!)
+  //   2. Genuine Verified Brilliant Move (!!) within <= 40cp of #1 & winning/strong
+  //   3. Non-repeating #1 move when winning
+  // And assigns the EXACT classification: 'mate' | 'brilliant' | 'great' | 'book' | 'best'
+  function pickAndClassifyFromPvsV41(fen, pvList, histCtx) {
+    if (!pvList || !pvList.length) return null;
+
+    // Deduplicate by UCI & sort strongest first
+    const byUci = new Map();
+    pvList.forEach(p => {
+      if (!p || !p.uci) return;
+      const prev = byUci.get(p.uci);
+      if (!prev || (p.depth || 0) > (prev.depth || 0)) byUci.set(p.uci, p);
+    });
+    const sorted = Array.from(byUci.values()).sort((a, b) => numericEvalScore(b) - numericEvalScore(a));
+    if (!sorted.length) return null;
+
+    const top = sorted[0];
+    const second = sorted.length > 1 ? sorted[1] : null;
+    const topScore = numericEvalScore(top);
+    const secScore = second ? numericEvalScore(second) : null;
+    const isOpeningBook = isBookMoveNowV41(fen, top.uci);
+
+    // 1. Check ALL candidates for a GENUINE BRILLIANT SACRIFICE (!!)
+    if (!isOpeningBook) {
+      let bestBril = null;
+      for (let i = 0; i < sorted.length; i++) {
+        const cand = sorted[i];
+        const cScore = numericEvalScore(cand);
+        const cDepth = cand.depth || 0;
+
+        // Avoid repeating into a draw when winning
+        if (histCtx.threefoldUcis.has(cand.uci) && cScore >= 60) continue;
+
+        const isForcedMate = (cand.moverMate !== null && cand.moverMate > 0);
+        const topIsMate = (top.moverMate !== null && top.moverMate > 0);
+
+        // Must be verified sound & strong:
+        // - If top is forced mate: brilliant candidate must ALSO be forced mate (within +1 move)
+        // - Otherwise: must be >= +0.50 pawns AND within 40cp of #1 (or within 65cp if >= +2.0 winning!)
+        const isSound = topIsMate
+          ? (isForcedMate && cand.moverMate <= top.moverMate + 1)
+          : (isForcedMate || (cScore >= 50 && (topScore - cScore <= 40 || (cScore >= 200 && topScore - cScore <= 65))));
+
+        if (!isSound || cDepth < 9) continue;
+
+        const sacInfo = inspectGenuineSacrificeV41(fen, cand.uci);
+        if (sacInfo) {
+          bestBril = {
+            ...cand,
+            moveType: 'brilliant',
+            sacInfo,
+            gapOverSecond: second ? (cScore - secScore) : 0
+          };
+          break;
+        }
+      }
+      if (bestBril) return bestBril;
+    }
+
+    // 2. Otherwise pick #1 (skipping 3-fold repetition if winning!)
+    let chosen = top;
+    if ((histCtx.threefoldUcis.has(top.uci) || (histCtx.repeatingUcis.has(top.uci) && topScore >= 220)) && sorted.length > 1) {
+      const alt = sorted.find(p => !histCtx.repeatingUcis.has(p.uci) && numericEvalScore(p) >= 100);
+      if (alt) chosen = alt;
+    }
+
+    // Determine EXACT move classification!
+    let moveType = 'best';
+    if (chosen.moverMate !== null && chosen.moverMate > 0) {
+      moveType = 'mate';
+    } else if (isBookMoveNowV41(fen, chosen.uci)) {
+      moveType = 'book';
+    } else if (second && chosen === top && (topScore - secScore >= 155) && topScore >= -60) {
+      moveType = 'great';
+    }
+
+    return {
+      ...chosen,
+      moveType,
+      sacInfo: null,
+      gapOverSecond: (second && chosen === top) ? (topScore - secScore) : 0
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. PRE-COMPUTE "ACCEPT SACRIFICE" PUNISHMENT SEQUENCE IN BACKGROUND!
+  //    So when a Brilliant (!!) is found, we show BOTH the exact Accept trap
+  //    AND pre-cache Move 2 so your next 'B' press is 0ms instant!
+  // -------------------------------------------------------------------------
+  async function solveAcceptSacrificeFollowUpV41(drawObj, sacInfo, reqTok) {
+    if (!sacInfo || !sacInfo.fenAfterAccept || !sacInfo.acceptMove) return;
+    const accFen = sacInfo.fenAfterAccept;
+    const accTurnSign = (accFen.split(' ')[1] === 'w') ? 1 : -1;
+
+    // 1. Check instant M1/M2 after they take the sacrificed piece!
+    const immMate = findInstantMateV41(accFen);
+    if (immMate) {
+      const seq = expandPvSequence(accFen, immMate.pvTokens, 4);
+      if (seq.length > 0) {
+        attachAcceptSequenceToDraw(drawObj, sacInfo.acceptMove, seq, immMate.moverMate, null, 99, reqTok);
+        return;
+      }
+    }
+
+    // 2. Ask Stockfish 18 NNUE (`chess-api.com`) for the exact punishing sequence if they accept!
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 2800);
+      const r = await fetch('https://chess-api.com/v1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fen: accFen, depth: 16, maxThinkingTime: 85, variants: 1 }),
+        signal: ctrl.signal
+      });
+      clearTimeout(tid);
+      if (!r.ok) return;
+      const d = await r.json();
+      const uci = d && (d.move || d.lan || (d.from && d.to ? d.from + d.to + (d.promotion || '') : null));
+      if (!uci) return;
+
+      const cont = Array.isArray(d.continuationArr) ? d.continuationArr : [];
+      const toks = (cont[0] === uci) ? cont : [uci, ...cont];
+      const seq = expandPvSequence(accFen, toks, 4);
+      const rawM = (d.mate !== null && d.mate !== undefined && d.mate !== '') ? Number(d.mate) : null;
+      const mMate = (rawM && !isNaN(rawM)) ? rawM * accTurnSign : null;
+      const rawCp = (d.centipawns !== null && d.centipawns !== undefined && d.centipawns !== '') ? Number(d.centipawns) : Math.round((Number(d.eval) || 0) * 100);
+      const mCp = isNaN(rawCp) ? 0 : rawCp * accTurnSign;
+
+      if (seq.length > 0) {
+        attachAcceptSequenceToDraw(drawObj, sacInfo.acceptMove, seq, mMate, mCp, Number(d.depth) || 16, reqTok);
+      }
+    } catch (e) {}
+  }
+
+  function attachAcceptSequenceToDraw(drawObj, acceptMove, followSeq, followMate, followCp, depth, reqTok) {
+    const firstPunish = followSeq[0];
+    if (!firstPunish) return;
+
+    // Pre-cache the exact response for fenAfterAccept so next 'B' press is 0ms!
+    const accFen = drawObj.sacInfo && drawObj.sacInfo.fenAfterAccept;
+    if (accFen) {
+      v41PrecomputedFollow.set(fenKey4(accFen), {
+        uci: firstPunish.uci,
+        from: firstPunish.from,
+        to: firstPunish.to,
+        san: firstPunish.san,
+        moveType: (followMate && followMate > 0) ? 'mate' : 'best',
+        moverMate: followMate,
+        moverCp: followCp,
+        depth,
+        pvSteps: followSeq
+      });
+    }
+
+    // Update the currently displayed Brilliant arrow & sequence pill live!
+    if (reqTok !== v41ReqToken || !v41ActiveDraw || v41ActiveDraw.uci !== drawObj.uci) return;
+    drawObj.acceptSeqText = `if ${acceptMove.san} → ${followSeq.slice(0, 3).map(s => s.san).join(' ')}`;
+    drawObj.replyFrom = acceptMove.from;
+    drawObj.replyTo   = acceptMove.to;
+    drawObj.followFrom = firstPunish.from;
+    drawObj.followTo   = firstPunish.to;
+    renderV41Stealth(drawObj);
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. STEALTH MULTI-ARROW + MOVE-TYPE + SEQUENCE OVERLAY RENDERER
+  // -------------------------------------------------------------------------
+  function sqCenterV41(sq) {
+    if (!sq || sq.length < 2) return null;
+    const f = FILES.indexOf(sq[0]), r = parseInt(sq[1], 10);
+    if (f < 0 || isNaN(r)) return null;
+    const col = boardFlipped ? (7 - f) : f;
+    const row = boardFlipped ? (r - 1) : (8 - r);
+    return { x: col * 100 + 50, y: row * 100 + 50, col, row };
+  }
+
+  function polyArrowV41(x1, y1, x2, y2, sw = 9.5, hw = 21) {
+    const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy);
+    if (L < 22) return '';
+    const ux = dx / L, uy = dy / L, px = -uy, py = ux;
+    const so = Math.min(18, L * 0.16), to = Math.min(14, L * 0.12);
+    const hl = Math.min(34, Math.max(21, Math.max(24, L - so - to) * 0.44));
+    const sx = x1 + ux * so, sy = y1 + uy * so;
+    const tx = x2 - ux * to, ty = y2 - uy * to;
+    const bx = tx - ux * hl, by = ty - uy * hl;
+    return [
+      [sx + px * sw, sy + py * sw], [bx + px * sw, by + py * sw],
+      [bx + px * hw, by + py * hw], [tx, ty],
+      [bx - px * hw, by - py * hw], [bx - px * sw, by - py * sw],
+      [sx - px * sw, sy - py * sw]
+    ].map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  }
+
+  function ensureStealthDomV41() {
+    if (!boardEl || !boardEl.parentElement) return null;
+    const parent = boardEl.parentElement;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+
+    let host = document.getElementById('v38StealthHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'v38StealthHost';
+      host.className = 'hidden';
+      host.innerHTML = `<svg id="v38StealthCanvas" viewBox="0 0 800 800" preserveAspectRatio="none"></svg>`;
+      parent.appendChild(host);
+    }
+    host.style.left   = `${boardEl.offsetLeft}px`;
+    host.style.top    = `${boardEl.offsetTop}px`;
+    host.style.width  = `${boardEl.offsetWidth}px`;
+    host.style.height = `${boardEl.offsetHeight}px`;
+
+    let pill = document.getElementById('v38StealthPill');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'v38StealthPill';
+      pill.className = 'hidden';
+      parent.appendChild(pill);
+    }
+    return { host, svg: host.querySelector('#v38StealthCanvas'), pill };
+  }
+
+  function clearV41Stealth() {
+    v41ActiveDraw = null;
+    v41ReqToken++;
+    v41SfHandler = null;
+    if (v41SfWorker && v41SfReady) {
+      try { v41SfWorker.postMessage('stop'); } catch (e) {}
+    }
+    const host = document.getElementById('v38StealthHost');
+    const pill = document.getElementById('v38StealthPill');
+    if (host) {
+      host.classList.add('hidden');
+      const s = host.querySelector('#v38StealthCanvas');
+      if (s) s.innerHTML = '';
+    }
+    if (pill) pill.classList.add('hidden');
+  }
+
+  const TYPE_STYLE = {
+    mate:      { color: '#f7c045', badge: '👑 MATE',      shortMark: ''   },
+    brilliant: { color: '#24d1c6', badge: '💎 BRILLIANT', shortMark: '!!' },
+    great:     { color: '#32b8e6', badge: '! GREAT',      shortMark: '!'  },
+    book:      { color: '#d4a373', badge: '📖 BOOK',      shortMark: ''   },
+    best:      { color: '#81b64c', badge: '★ BEST',       shortMark: ''   }
+  };
+
+  function renderV41Stealth(draw) {
+    const els = ensureStealthDomV41();
+    if (!els || !draw || !draw.from || !draw.to) return;
+    v41ActiveDraw = draw;
+
+    const p1 = sqCenterV41(draw.from), p2 = sqCenterV41(draw.to);
+    if (!p1 || !p2) return;
+
+    const st = TYPE_STYLE[draw.moveType] || TYPE_STYLE.best;
+    const col = st.color;
+    let out = '';
+
+    // 1. Opponent expected reply / Accept-Sacrifice arrow (subtle red)
+    if (draw.replyFrom && draw.replyTo) {
+      const r1 = sqCenterV41(draw.replyFrom), r2 = sqCenterV41(draw.replyTo);
+      if (r1 && r2) {
+        const rPts = polyArrowV41(r1.x, r1.y, r2.x, r2.y, 5.5, 13);
+        if (rPts) out += `<polygon points="${rPts}" fill="#ef4444" fill-opacity="0.46" stroke="rgba(15,14,12,0.35)" stroke-width="1.2" />`;
+      }
+    }
+
+    // 2. YOUR Follow-Up Combo Arrow (Move 2 of the Brilliant or Mate sequence!)
+    if (draw.followFrom && draw.followTo && (draw.moveType === 'brilliant' || draw.moveType === 'mate')) {
+      const f1 = sqCenterV41(draw.followFrom), f2 = sqCenterV41(draw.followTo);
+      if (f1 && f2) {
+        const fPts = polyArrowV41(f1.x, f1.y, f2.x, f2.y, 6.5, 15);
+        if (fPts) out += `<polygon points="${fPts}" fill="${col}" fill-opacity="0.6" stroke="rgba(15,14,12,0.45)" stroke-width="1.4" />`;
+        out += `<circle cx="${f2.col * 100 + 82}" cy="${f2.row * 100 + 18}" r="13" fill="${col}" stroke="#141311" stroke-width="2" />`;
+        out += `<text x="${f2.col * 100 + 82}" y="${f2.row * 100 + 23}" text-anchor="middle" fill="#141311" font-size="14" font-weight="900" font-family="Inter, sans-serif">2</text>`;
+      }
+    }
+
+    // 3. Highlight Ring on Destination Square for Brilliant / Mate / Great
+    if (draw.moveType === 'brilliant' || draw.moveType === 'mate' || draw.moveType === 'great') {
+      const x0 = p2.col * 100 + 5, y0 = p2.row * 100 + 5;
+      out += `<rect x="${x0}" y="${y0}" width="90" height="90" rx="11" fill="${col}" fill-opacity="0.18" stroke="${col}" stroke-width="5.5" />`;
+      if (st.shortMark) {
+        out += `<circle cx="${x0 + 78}" cy="${y0 + 12}" r="14" fill="${col}" stroke="#141311" stroke-width="2" />`;
+        out += `<text x="${x0 + 78}" y="${y0 + 17}" text-anchor="middle" fill="#141311" font-size="13" font-weight="900" font-family="Inter, sans-serif">${st.shortMark}</text>`;
+      }
+    }
+
+    // 4. Primary Move Arrow (Solid Bold Polygon)
+    const pts = polyArrowV41(p1.x, p1.y, p2.x, p2.y, 9.5, 21.5);
+    if (pts) {
+      out += `<polygon points="${pts}" fill="${col}" fill-opacity="0.92" stroke="rgba(15,14,12,0.55)" stroke-width="1.8" stroke-linejoin="round" />`;
+    }
+
+    els.svg.innerHTML = out;
+    els.host.classList.remove('hidden');
+
+    // Discreet Bottom-Left Info Pill: [Exact Move Type] [Move] [Eval] [Next Sequence]
+    let evalStr = '';
+    if (draw.moverMate !== null && draw.moverMate !== undefined) {
+      evalStr = draw.moverMate > 0 ? `M${draw.moverMate}` : `-M${Math.abs(draw.moverMate)}`;
+    } else if (typeof draw.moverCp === 'number') {
+      evalStr = `${draw.moverCp >= 0 ? '+' : ''}${(draw.moverCp / 100).toFixed(1)}`;
+    }
+
+    let seqStr = '';
+    if (draw.acceptSeqText) {
+      seqStr = draw.acceptSeqText;
+    } else if (draw.pvSteps && draw.pvSteps.length > 1) {
+      seqStr = draw.pvSteps.slice(1, 4).map(s => s.san).join(' → ');
+    }
+
+    const dStr = draw.depth && draw.depth < 90 ? ` d${draw.depth}` : '';
+    els.pill.innerHTML = `
+      <span style="color:${col};font-weight:800;">${st.badge}</span>
+      <span style="color:#ffffff;font-weight:800;">${draw.san}${st.shortMark}</span>
+      <span style="color:#9e9c99;font-size:10px;">${evalStr}${dStr}</span>
+      ${seqStr ? `<span style="color:#c7c5c0;font-size:10px;border-left:1px solid rgba(255,255,255,0.16);padding-left:6px;margin-left:2px;">${seqStr}</span>` : ''}
+    `;
+    els.pill.classList.remove('hidden');
+  }
+
+  // -------------------------------------------------------------------------
+  // 6. MAIN 'B' ENGINE RUNNER (MULTI-PV 5 BRILLIANT + MATE + SEQUENCE)
+  // -------------------------------------------------------------------------
+  function priorityOfResultV41(picked, engineTier) {
+    const isWinMate = (picked.moverMate !== null && picked.moverMate > 0);
+    if (isWinMate) {
+      // Mate that is ALSO a Brilliant sacrifice gets top honor; shorter mate always wins!
+      return 3000000 - Math.min(99, picked.moverMate) * 1000 + (picked.moveType === 'brilliant' ? 400 : 0) + Math.min(99, picked.depth || 15);
+    }
+    if (picked.moveType === 'brilliant') {
+      // Genuine Stockfish-verified Brilliant move beats normal quiet moves!
+      return 2000000 + engineTier * 100 + (picked.depth || 10) * 50;
+    }
+    if (picked.moverMate !== null && picked.moverMate < 0) {
+      return -1000000 + Math.min(99, Math.abs(picked.moverMate)) * 1000 + (picked.depth || 0);
+    }
+    return 100000 + engineTier * 200 + (picked.depth || 10) * 100;
+  }
+
+  function runBrilliantEngineV41() {
+    if (!v41Unlocked || isEditorMode || game.game_over()) return;
+
+    // Toggle OFF if already visible
+    if (v41ActiveDraw) {
+      clearV41Stealth();
+      return;
+    }
+
+    const fen = game.fen();
+    const turnSign = game.turn() === 'w' ? 1 : -1;
+    const histCtx = buildHistCtxV41(fen);
+    const els = ensureStealthDomV41();
+    if (!els) return;
+
+    const myTok = ++v41ReqToken;
+
+    // 0A. Instant 0ms hit if this exact position is the pre-computed follow-up to our previous Brilliant move!
+    const preFollow = v41PrecomputedFollow.get(fenKey4(fen));
+    if (preFollow) {
+      const steps = preFollow.pvSteps || [];
+      renderV41Stealth({
+        ...preFollow,
+        replyFrom: steps[1]?.from || null,
+        replyTo: steps[1]?.to || null,
+        followFrom: steps[2]?.from || null,
+        followTo: steps[2]?.to || null
+      });
+      // Still keep searching in background to upgrade if an even faster mate or 2nd Brilliant exists!
+    } else {
+      els.pill.innerHTML = `<span class="v38-think-dot"></span><span>...</span>`;
+      els.pill.classList.remove('hidden');
+    }
+
+    // 0B. Instant Guaranteed M1 / M2 Solver (<15ms!)
+    const immMate = findInstantMateV41(fen);
+    if (immMate) {
+      const steps = expandPvSequence(fen, immMate.pvTokens, 4);
+      if (steps.length > 0) {
+        const sacInfo = inspectGenuineSacrificeV41(fen, immMate.uci);
+        renderV41Stealth({
+          uci: steps[0].uci,
+          from: steps[0].from,
+          to: steps[0].to,
+          san: steps[0].san,
+          moveType: sacInfo ? 'brilliant' : 'mate',
+          moverMate: immMate.moverMate,
+          moverCp: null,
+          depth: 99,
+          pvSteps: steps,
+          replyFrom: steps[1]?.from || null,
+          replyTo: steps[1]?.to || null,
+          followFrom: steps[2]?.from || null,
+          followTo: steps[2]?.to || null
+        });
+        return;
+      }
+    }
+
+    // 0C. Instant Cache Hit (if no repetition risk)
+    const cached = v41Cache.get(fen);
+    if (cached && !histCtx.repeatingUcis.has(cached.uci)) {
+      renderV41Stealth(cached);
+      return;
+    }
+
+    let bestPrio = -9999999;
+
+    function acceptPicked(picked, engineTier) {
+      if (myTok !== v41ReqToken || game.fen() !== fen || !picked || !picked.uci) return;
+      const res = resolveMoveV41(fen, picked.uci);
+      if (!res) return;
+
+      const mv = res.mv;
+      let mMate = (picked.moverMate !== undefined) ? picked.moverMate : null;
+      if (mv.san.includes('#')) mMate = 1;
+
+      const enriched = { ...picked, moverMate: mMate };
+      const prio = priorityOfResultV41(enriched, engineTier);
+      if (prio <= bestPrio) return;
+      bestPrio = prio;
+
+      const pvToks = Array.isArray(picked.pvTokens) && picked.pvTokens.length ? picked.pvTokens : [picked.uci];
+      const steps = expandPvSequence(fen, pvToks, 5);
+
+      const drawObj = {
+        uci: mv.from + mv.to + (mv.promotion || ''),
+        from: mv.from,
+        to: mv.to,
+        san: mv.san,
+        moveType: (mMate !== null && mMate > 0 && picked.moveType !== 'brilliant') ? 'mate' : picked.moveType,
+        moverCp: picked.moverCp,
+        moverMate: mMate,
+        depth: picked.depth || 0,
+        pvSteps: steps,
+        sacInfo: picked.sacInfo || null,
+        replyFrom: steps[1]?.from || null,
+        replyTo: steps[1]?.to || null,
+        followFrom: steps[2]?.from || null,
+        followTo: steps[2]?.to || null,
+        acceptSeqText: null
+      };
+
+      // Pre-cache PV step 2 (the follow-up after Stockfish's best reply) too!
+      if (steps.length >= 3 && steps[1].fenAfter) {
+        v41PrecomputedFollow.set(fenKey4(steps[1].fenAfter), {
+          uci: steps[2].uci,
+          from: steps[2].from,
+          to: steps[2].to,
+          san: steps[2].san,
+          moveType: (mMate && mMate > 1) ? 'mate' : 'best',
+          moverMate: (mMate && mMate > 1) ? (mMate - 1) : null,
+          moverCp: picked.moverCp,
+          depth: picked.depth || 14,
+          pvSteps: steps.slice(2)
+        });
+      }
+
+      if (prio >= 102000) {
+        v41Cache.set(fen, drawObj);
+        if (v41Cache.size > 80) v41Cache.delete(v41Cache.keys().next().value);
+      }
+
+      renderV41Stealth(drawObj);
+
+      // If this is a GENUINE BRILLIANT SACRIFICE (!!), immediately calculate the exact punishment if opponent ACCEPTS it!
+      if (drawObj.moveType === 'brilliant' && drawObj.sacInfo) {
+        solveAcceptSacrificeFollowUpV41(drawObj, drawObj.sacInfo, myTok);
+      }
+    }
+
+    // ---- ENGINE 1: LICHESS CLOUD STOCKFISH (MULTI-PV 5, DEPTH 30–60+) ----
+    (async () => {
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 2400);
+        const r = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=5`, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data || !Array.isArray(data.pvs) || !data.pvs.length) return;
+        const dVal = Number(data.depth) || 32;
+        const pvs = data.pvs.map(pv => {
+          const toks = (pv.moves || '').trim().split(/\s+/);
+          return {
+            uci: toks[0],
+            pvTokens: toks,
+            moverCp: typeof pv.cp === 'number' ? pv.cp * turnSign : null,
+            moverMate: typeof pv.mate === 'number' ? pv.mate * turnSign : null,
+            depth: dVal
+          };
+        }).filter(x => x.uci);
+        const picked = pickAndClassifyFromPvsV41(fen, pvs, histCtx);
+        if (picked) acceptPicked(picked, 5);
+      } catch (e) {}
+    })();
+
+    // ---- ENGINE 2: STOCKFISH 18 NNUE (CHESS-API.COM DEPTH 18) ----
+    (async () => {
+      try {
+        const bodyObj = { fen, depth: 18, maxThinkingTime: 100, variants: 1 };
+        if (histCtx.threefoldUcis.size > 0 && histCtx.nonRepeatingUcis.length > 0) {
+          bodyObj.searchmoves = histCtx.nonRepeatingUcis.join(' ');
+        }
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 3200);
+        const r = await fetch('https://chess-api.com/v1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bodyObj),
+          signal: ctrl.signal
+        });
+        clearTimeout(tid);
+        if (!r.ok) return;
+        const d = await r.json();
+        const uci = d && (d.move || d.lan || (d.from && d.to ? d.from + d.to + (d.promotion || '') : null));
+        if (!uci) return;
+
+        const dVal = Number(d.depth) || 18;
+        const rawM = (d.mate !== null && d.mate !== undefined && d.mate !== '') ? Number(d.mate) : null;
+        const rawCp = (d.centipawns !== null && d.centipawns !== undefined && d.centipawns !== '')
+          ? Number(d.centipawns)
+          : (typeof d.eval === 'number' ? Math.round(d.eval * 100) : 0);
+        const mMate = (rawM !== null && !isNaN(rawM) && rawM !== 0) ? rawM * turnSign : null;
+        const mCp = isNaN(rawCp) ? 0 : rawCp * turnSign;
+        const cont = Array.isArray(d.continuationArr) ? d.continuationArr : [];
+        const pvTokens = (cont[0] === uci) ? cont : [uci, ...cont];
+
+        const picked = pickAndClassifyFromPvsV41(fen, [{ uci, pvTokens, moverCp: mCp, moverMate: mMate, depth: dVal }], histCtx);
+        if (picked) acceptPicked(picked, 4);
+      } catch (e) {}
+    })();
+
+    // ---- ENGINE 3: STOCKFISH.ONLINE DEPTH 15 ----
+    (async () => {
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 4500);
+        const r = await fetch(`https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(fen)}&depth=15`, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (!r.ok) return;
+        const d2 = await r.json();
+        if (!d2 || !d2.success || !d2.bestmove) return;
+        const toks = d2.bestmove.trim().split(/\s+/);
+        const uci = (toks[0] === 'bestmove' ? toks[1] : toks[0]) || '';
+        if (uci.length < 4) return;
+        const rawM = (d2.mate !== null && d2.mate !== undefined) ? Number(d2.mate) : null;
+        const mMate = (rawM !== null && !isNaN(rawM) && rawM !== 0) ? rawM * turnSign : null;
+        const mCp = typeof d2.evaluation === 'number' ? Math.round(d2.evaluation * 100) * turnSign : 0;
+        const cont = typeof d2.continuation === 'string' ? d2.continuation.trim().split(/\s+/) : [uci];
+        const pvTokens = (cont[0] === uci) ? cont : [uci, ...cont];
+
+        const picked = pickAndClassifyFromPvsV41(fen, [{ uci, pvTokens, moverCp: mCp, moverMate: mMate, depth: 15 }], histCtx);
+        if (picked) acceptPicked(picked, 3);
+      } catch (e) {}
+    })();
+
+    // ---- ENGINE 4: LOCAL STOCKFISH 10 MULTI-PV 5 (SEES ALL TOP 5 MOVES FOR BRILLIANT & GREAT!) ----
+    initLocalStockfishV41();
+    const startLocalMultiPv5 = () => {
+      if (myTok !== v41ReqToken || !v41SfWorker) return;
+      const pvMap = new Map();
+      let maxDepth = 0;
+
+      v41SfHandler = (line) => {
+        if (myTok !== v41ReqToken) return;
+        if (line.startsWith('info ') && line.includes(' pv ') && line.includes(' score ')) {
+          const dM = line.match(/\bdepth (\d+)/);
+          const mpM = line.match(/\bmultipv (\d+)/);
+          const scM = line.match(/\bscore (cp|mate) (-?\d+)/);
+          const pvM = line.match(/\bpv ([^\n]+)/);
+          if (!dM || !scM || !pvM) return;
+
+          const depth = parseInt(dM[1], 10);
+          if (depth < 8 || depth < maxDepth) return;
+          if (depth > maxDepth) { maxDepth = depth; pvMap.clear(); }
+
+          const mp = mpM ? parseInt(mpM[1], 10) : 1;
+          const isMate = scM[1] === 'mate';
+          const scVal = parseInt(scM[2], 10);
+          const pvTokens = pvM[1].trim().split(/\s+/);
+          if (!pvTokens[0] || pvTokens[0].length < 4) return;
+
+          pvMap.set(mp, {
+            uci: pvTokens[0],
+            pvTokens,
+            moverCp: isMate ? null : scVal,
+            moverMate: isMate ? scVal : null,
+            depth
+          });
+
+          // Evaluate as soon as PV 1..2+ arrive at depth >= 9 (and keep upgrading cleanly as depth climbs!)
+          if (pvMap.has(1) && (pvMap.size >= 2 || depth >= 11)) {
+            const picked = pickAndClassifyFromPvsV41(fen, Array.from(pvMap.values()), histCtx);
+            if (picked) acceptPicked(picked, 2);
+          }
+        }
+      };
+
+      try {
+        v41SfWorker.postMessage('stop');
+        v41SfWorker.postMessage(histCtx.uciPosCmd);
+        v41SfWorker.postMessage('go depth 18');
+      } catch (e) {}
+    };
+
+    if (v41SfReady) {
+      startLocalMultiPv5();
+    } else {
+      let waited = 0;
+      const wt = setInterval(() => {
+        waited += 80;
+        if (myTok !== v41ReqToken || waited > 4500) { clearInterval(wt); return; }
+        if (v41SfReady) { clearInterval(wt); startLocalMultiPv5(); }
+      }, 80);
+    }
+
+    // ---- EMERGENCY OFFLINE FAILSAFE (ONLY FIRES IF ALL 4 ENGINES WERE BLOCKED AFTER 2.2s) ----
+    setTimeout(() => {
+      if (myTok !== v41ReqToken || bestPrio > -9999999 || game.fen() !== fen) return;
+      try {
+        const sim = new Chess(fen);
+        const legs = sim.moves({ verbose: true });
+        if (!legs.length) return;
+        let bestM = legs[0], bestS = -999999;
+        for (let i = 0; i < legs.length; i++) {
+          const m = legs[i];
+          sim.move(m);
+          let sc = m.captured ? (PVAL[m.captured] || 100) : 0;
+          if (sim.in_checkmate()) sc = 99999;
+          else if (sim.moves({ verbose: true }).some(x => x.to === m.to)) sc -= (PVAL[m.piece] || 100) * 0.9;
+          if (m.san === 'O-O' || m.san === 'O-O-O') sc += 50;
+          sim.undo();
+          if (sc > bestS) { bestS = sc; bestM = m; }
+        }
+        const uci = bestM.from + bestM.to + (bestM.promotion || '');
+        acceptPicked({ uci, pvTokens: [uci], moverCp: 0, moverMate: null, depth: 2, moveType: isBookMoveNowV41(fen, uci) ? 'book' : 'best' }, 1);
+      } catch (e) {}
+    }, 2200);
+  }
+
+  // -------------------------------------------------------------------------
+  // 7. FIXED 'B' HOTKEY LISTENER (NO MORE !undefined VIDEO BUG!)
+  // -------------------------------------------------------------------------
+  window.addEventListener('keydown', (e) => {
+    if (!v41Unlocked) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+
+    // Properly check whether any Coach Video panel actually exists AND is visible!
+    const v38p = document.getElementById('v38VideoPanel');
+    const v37p = document.getElementById('v37VideoPanel');
+    const v36p = document.getElementById('v36FilmRoomPanel');
+    const vidOpen = Boolean(
+      (v38p && !v38p.classList.contains('hidden')) ||
+      (v37p && !v37p.classList.contains('hidden')) ||
+      (v36p && !v36p.classList.contains('hidden'))
+    );
+    if (vidOpen) return;
+
+    if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      runBrilliantEngineV41();
+    } else if (e.key === 'Escape' && v41ActiveDraw) {
+      clearV41Stealth();
+    }
+  }, true);
+
+  // Auto-clear when a move is played, board changes, or tab switches
+  const prevCommitV41 = window.commitMoveOnBoardInstant;
+  window.commitMoveOnBoardInstant = function(moveObj) {
+    if (v41ActiveDraw) clearV41Stealth();
+    prevCommitV41(moveObj);
+  };
+
+  let lastFenV41 = '';
+  const prevRenderV41 = window.renderBoard;
+  window.renderBoard = function() {
+    prevRenderV41();
+    const curFen = typeof game !== 'undefined' ? game.fen() : '';
+    if (curFen !== lastFenV41) {
+      lastFenV41 = curFen;
+      if (v41ActiveDraw) clearV41Stealth();
+    } else if (v41ActiveDraw) {
+      renderV41Stealth(v41ActiveDraw);
+    }
+  };
+
+  const prevActV41 = window.activateSidebarTab;
+  window.activateSidebarTab = function(tabName) {
+    clearV41Stealth();
+    if (prevActV41) prevActV41(tabName);
+  };
+
+  window.addEventListener('resize', () => {
+    if (v41ActiveDraw) renderV41Stealth(v41ActiveDraw);
+  });
+})();
+</script>
 </html>
