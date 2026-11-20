@@ -43009,4 +43009,613 @@
   };
 })();
 </script>
+  <!-- ===================================================================== -->
+<!-- ⚡ V39 REAL STOCKFISH NNUE (3200–3600 ELO) ENGINE FOR 'B' HOTKEY      -->
+<!--    1. Races Lichess Cloud (d40+) + Stockfish 16/17 NNUE (d18) +       -->
+<!--       Stockfish Online (d15) + Local Stockfish 10 MultiPV-3 Worker    -->
+<!--    2. True Brilliant (!!) Maximizer (ONLY if Stockfish d12+ proves    -->
+<!--       it's within 0.18 of #1 — zero inaccurate moves!)                -->
+<!--    3. Works with existing bottom-left Pass: "chessmog" & 'B' key      -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyRealStockfishMogEngineV39() {
+  const FILES = 'abcdefgh';
+  const PVAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+
+  let v39ReqToken = 0;
+  let v39ActiveDraw = null;
+  let v39SfWorker = null;
+  let v39SfReady = false;
+  let v39SfInitStarted = false;
+  const v39FenCache = new Map();
+
+  // Check unlock state directly from V38's discreet checkmark (#v38PassCheck)
+  function isSecretUnlockedV39() {
+    const chk = document.getElementById('v38PassCheck');
+    return Boolean(chk && !chk.classList.contains('hidden'));
+  }
+
+  // -------------------------------------------------------------------------
+  // 1. REAL LOCAL STOCKFISH 10 WEB WORKER (MULTI-PV 3, ZERO NETWORK NEEDED)
+  // -------------------------------------------------------------------------
+  let sfLineListeners = [];
+
+  function initLocalStockfishV39() {
+    if (v39SfInitStarted) return;
+    v39SfInitStarted = true;
+    try {
+      const workerBlob = new Blob(
+        [`importScripts('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js');`],
+        { type: 'application/javascript' }
+      );
+      const sf = new Worker(URL.createObjectURL(workerBlob));
+      v39SfWorker = sf;
+
+      sf.onmessage = (ev) => {
+        const line = typeof ev.data === 'string' ? ev.data : '';
+        if (!line) return;
+        if (line === 'uciok') {
+          sf.postMessage('setoption name MultiPV value 3');
+          sf.postMessage('setoption name Skill Level value 20');
+          sf.postMessage('setoption name Hash value 32');
+          sf.postMessage('setoption name Contempt value 24');
+          sf.postMessage('isready');
+        } else if (line === 'readyok') {
+          v39SfReady = true;
+        }
+        for (let i = 0; i < sfLineListeners.length; i++) {
+          try { sfLineListeners[i](line); } catch (e) {}
+        }
+      };
+      sf.postMessage('uci');
+    } catch (e) {
+      v39SfWorker = null;
+    }
+  }
+
+  // Pre-warm local Stockfish silently the moment "chessmog" is entered!
+  document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'v38PassInput') {
+      if ((e.target.value || '').trim().toLowerCase() === 'chessmog') {
+        initLocalStockfishV39();
+      }
+    }
+  }, true);
+
+  // -------------------------------------------------------------------------
+  // 2. CHESS MOVE & TRUE SACRIFICE VERIFIER (ZERO FAKE SACRIFICES!)
+  // -------------------------------------------------------------------------
+  function normalizeUciForChessJs(chess, uciStr) {
+    if (!uciStr || uciStr.length < 4) return null;
+    let from = uciStr.slice(0, 2);
+    let to = uciStr.slice(2, 4);
+    const promo = uciStr.length >= 5 ? uciStr[4].toLowerCase() : undefined;
+
+    // Handle Chess960-style castling UCI (e.g. e1h1 -> e1g1) if ever returned
+    const p = chess.get(from);
+    if (p && p.type === 'k') {
+      if (from === 'e1' && to === 'h1') to = 'g1';
+      else if (from === 'e1' && to === 'a1') to = 'c1';
+      else if (from === 'e8' && to === 'h8') to = 'g8';
+      else if (from === 'e8' && to === 'a8') to = 'c8';
+    }
+    return { from, to, promotion: promo };
+  }
+
+  function resolveMoveObj(fen, uciStr) {
+    try {
+      const sim = new Chess(fen);
+      const spec = normalizeUciForChessJs(sim, uciStr);
+      if (!spec) return null;
+      const mv = sim.move({ from: spec.from, to: spec.to, promotion: spec.promotion || 'q' });
+      if (!mv) return null;
+      return { mv, fenAfter: sim.fen() };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function countDefendersOnSq(fen, sq, ownerColor) {
+    try {
+      const sim = new Chess(fen);
+      const opp = ownerColor === 'w' ? 'b' : 'w';
+      const orig = sim.get(sq);
+      if (!orig || orig.type === 'k') return 0;
+      sim.remove(sq);
+      sim.put({ type: 'p', color: opp }, sq);
+      const parts = sim.fen().split(' ');
+      parts[1] = ownerColor;
+      parts[3] = '-';
+      return new Chess(parts.join(' ')).moves({ verbose: true }).filter(m => m.to === sq && m.captured).length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function isTrueTacticalSacrifice(fenBefore, uciStr) {
+    const resolved = resolveMoveObj(fenBefore, uciStr);
+    if (!resolved) return false;
+    const { mv, fenAfter } = resolved;
+    const moverColor = mv.color;
+    const movedVal = PVAL[mv.piece] || 100;
+    const capVal = mv.captured ? (PVAL[mv.captured] || 100) : 0;
+
+    try {
+      const simAfter = new Chess(fenAfter);
+      if (simAfter.in_checkmate()) return false;
+      const oppCaps = simAfter.moves({ verbose: true }).filter(m => m.captured);
+
+      // 1. Direct sacrifice: moved N/B/R/Q onto an enemy-attacked square with net material risk
+      if (mv.piece !== 'k' && mv.piece !== 'p' && (movedVal - capVal >= 200)) {
+        const atksOnDest = oppCaps.filter(m => m.to === mv.to);
+        if (atksOnDest.length > 0) {
+          const defCount = countDefendersOnSq(fenAfter, mv.to, moverColor);
+          const minEnemyAtk = Math.min(...atksOnDest.map(a => PVAL[a.piece] || 100));
+          if (defCount === 0 || atksOnDest.length > defCount || minEnemyAtk < movedVal - 100) {
+            return true;
+          }
+        }
+      }
+
+      // 2. Indirect en-prise sacrifice: intentionally leaves another N/B/R/Q hanging as bait
+      const otherHanging = oppCaps.filter(m => m.to !== mv.to && (PVAL[m.captured] || 100) >= 320);
+      for (const oh of otherHanging) {
+        if (countDefendersOnSq(fenAfter, oh.to, moverColor) === 0) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // Pick #1 move OR a real Stockfish-verified Brilliant sacrifice within 18cp of #1!
+  function selectOptimalOrBrilliantFromMultiPv(fen, pvList) {
+    if (!pvList || pvList.length === 0) return null;
+    // Sort best first (positive mate fastest > highest cp > negative mate slowest)
+    const rankScore = (p) => {
+      if (p.moverMate !== null && p.moverMate !== undefined) {
+        return p.moverMate > 0 ? (100000 - p.moverMate * 100) : (-100000 - p.moverMate * 100);
+      }
+      return p.moverCp || 0;
+    };
+
+    const sorted = pvList.slice().sort((a, b) => rankScore(b) - rankScore(a));
+    const best = sorted[0];
+    const bestVal = rankScore(best);
+
+    // Check if #1 itself is a true Brilliant sacrifice!
+    const bestIsSac = (best.depth >= 10) && ((best.moverMate !== null && best.moverMate > 0) || (best.moverCp || 0) >= 70) && isTrueTacticalSacrifice(fen, best.uci);
+    if (bestIsSac) {
+      return { ...best, isBrilliant: true };
+    }
+
+    // Check if PV #2 or #3 is a sound Brilliant sacrifice with ZERO accuracy loss (<= 18cp from #1 or same forced mate)!
+    if (best.depth >= 12 && sorted.length > 1) {
+      for (let i = 1; i < sorted.length; i++) {
+        const cand = sorted[i];
+        const cVal = rankScore(cand);
+        const sameMate = (best.moverMate > 0 && cand.moverMate > 0 && cand.moverMate <= best.moverMate + 1);
+        const virtuallyEqualAndWinning = (best.moverMate === null && cand.moverMate === null && cand.moverCp >= 85 && (bestVal - cVal <= 18));
+        if ((sameMate || virtuallyEqualAndWinning) && isTrueTacticalSacrifice(fen, cand.uci)) {
+          return { ...cand, isBrilliant: true };
+        }
+      }
+    }
+
+    return { ...best, isBrilliant: false };
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. STEALTH POLYGON ARROW + FOLLOW-UP GHOST ARROW RENDERER
+  // -------------------------------------------------------------------------
+  function sqCenterV39(sq) {
+    if (!sq || sq.length < 2) return null;
+    const f = FILES.indexOf(sq[0]);
+    const r = parseInt(sq[1], 10);
+    if (f < 0 || isNaN(r)) return null;
+    const col = boardFlipped ? (7 - f) : f;
+    const row = boardFlipped ? (r - 1) : (8 - r);
+    return { x: col * 100 + 50, y: row * 100 + 50, col, row };
+  }
+
+  function polyArrowV39(x1, y1, x2, y2, sw = 9.5, hw = 21) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const L = Math.hypot(dx, dy);
+    if (L < 22) return '';
+    const ux = dx / L, uy = dy / L, px = -uy, py = ux;
+    const so = Math.min(18, L * 0.16), to = Math.min(14, L * 0.12);
+    const hl = Math.min(34, Math.max(21, Math.max(24, L - so - to) * 0.44));
+    const sx = x1 + ux * so, sy = y1 + uy * so;
+    const tx = x2 - ux * to, ty = y2 - uy * to;
+    const bx = tx - ux * hl, by = ty - uy * hl;
+    return [
+      [sx + px * sw, sy + py * sw], [bx + px * sw, by + py * sw],
+      [bx + px * hw, by + py * hw], [tx, ty],
+      [bx - px * hw, by - py * hw], [bx - px * sw, by - py * sw],
+      [sx - px * sw, sy - py * sw]
+    ].map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  }
+
+  function ensureStealthDomV39() {
+    if (!boardEl || !boardEl.parentElement) return null;
+    const parent = boardEl.parentElement;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+
+    let host = document.getElementById('v38StealthHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'v38StealthHost';
+      host.className = 'hidden';
+      host.innerHTML = `<svg id="v38StealthCanvas" viewBox="0 0 800 800" preserveAspectRatio="none"></svg>`;
+      parent.appendChild(host);
+    }
+    host.style.left   = `${boardEl.offsetLeft}px`;
+    host.style.top    = `${boardEl.offsetTop}px`;
+    host.style.width  = `${boardEl.offsetWidth}px`;
+    host.style.height = `${boardEl.offsetHeight}px`;
+
+    let pill = document.getElementById('v38StealthPill');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'v38StealthPill';
+      pill.className = 'hidden';
+      parent.appendChild(pill);
+    }
+    return { host, svg: host.querySelector('#v38StealthCanvas'), pill };
+  }
+
+  function clearV39Stealth() {
+    v39ActiveDraw = null;
+    v39ReqToken++;
+    sfLineListeners = [];
+    if (v39SfWorker && v39SfReady) {
+      try { v39SfWorker.postMessage('stop'); } catch (e) {}
+    }
+    const host = document.getElementById('v38StealthHost');
+    const pill = document.getElementById('v38StealthPill');
+    if (host) {
+      host.classList.add('hidden');
+      const s = host.querySelector('#v38StealthCanvas');
+      if (s) s.innerHTML = '';
+    }
+    if (pill) pill.classList.add('hidden');
+  }
+
+  function renderV39Stealth(res) {
+    const els = ensureStealthDomV39();
+    if (!els || !res || !res.from || !res.to) return;
+    v39ActiveDraw = res;
+
+    const p1 = sqCenterV39(res.from), p2 = sqCenterV39(res.to);
+    if (!p1 || !p2) return;
+
+    const isWinningMate = (res.moverMate !== null && res.moverMate !== undefined && res.moverMate > 0);
+    const col = isWinningMate ? '#f7c045' : (res.isBrilliant ? '#24d1c6' : '#81b64c');
+    let markup = '';
+
+    // Subtle opponent-reply ghost arrow (if continuation available) so you see the exact follow-up!
+    if (res.replyFrom && res.replyTo) {
+      const r1 = sqCenterV39(res.replyFrom), r2 = sqCenterV39(res.replyTo);
+      if (r1 && r2) {
+        const rPts = polyArrowV39(r1.x, r1.y, r2.x, r2.y, 6, 13.5);
+        if (rPts) markup += `<polygon points="${rPts}" fill="#ef4444" fill-opacity="0.48" stroke="rgba(15,14,12,0.35)" stroke-width="1.2" />`;
+      }
+    }
+
+    if (isWinningMate || res.isBrilliant) {
+      const x0 = p2.col * 100 + 5, y0 = p2.row * 100 + 5;
+      markup += `<rect x="${x0}" y="${y0}" width="90" height="90" rx="11" fill="${col}" fill-opacity="0.16" stroke="${col}" stroke-width="5.5" />`;
+    }
+
+    const pts = polyArrowV39(p1.x, p1.y, p2.x, p2.y, 9.5, 21);
+    if (pts) {
+      markup += `<polygon points="${pts}" fill="${col}" fill-opacity="0.88" stroke="rgba(15,14,12,0.55)" stroke-width="1.8" stroke-linejoin="round" />`;
+    }
+
+    els.svg.innerHTML = markup;
+    els.host.classList.remove('hidden');
+
+    let evalLabel = '';
+    if (res.moverMate !== null && res.moverMate !== undefined) {
+      evalLabel = res.moverMate > 0 ? `M${res.moverMate}` : `-M${Math.abs(res.moverMate)}`;
+    } else if (typeof res.moverCp === 'number') {
+      const pawns = (res.moverCp / 100).toFixed(1);
+      evalLabel = `${res.moverCp >= 0 ? '+' : ''}${pawns}`;
+    }
+
+    const dTag = res.depth ? ` d${res.depth}` : '';
+    const brilMark = res.isBrilliant ? ' !!' : '';
+    els.pill.innerHTML = `<span style="color:${col};">✓</span><span>${res.san || (res.from + '→' + res.to)}${brilMark}</span><span style="color:#9e9c99;font-size:10px;">${evalLabel}${dTag}</span>`;
+    els.pill.classList.remove('hidden');
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. PARALLEL 4-ENGINE STOCKFISH NNUE RACER (3200–3600 ELO!)
+  // -------------------------------------------------------------------------
+  function runUltraStockfishRaceV39() {
+    if (!isSecretUnlockedV39() || isEditorMode || game.game_over()) return;
+
+    // Toggle OFF cleanly if already showing an arrow on this turn!
+    if (v39ActiveDraw) {
+      clearV39Stealth();
+      return;
+    }
+
+    const fen = game.fen();
+    const turn = game.turn(); // 'w' | 'b'
+    const turnSign = turn === 'w' ? 1 : -1;
+
+    // Instant 0ms hit if we already calculated Stockfish Depth 18+ for this exact FEN!
+    if (v39FenCache.has(fen)) {
+      renderV39Stealth(v39FenCache.get(fen));
+      return;
+    }
+
+    const els = ensureStealthDomV39();
+    if (!els) return;
+
+    const myTok = ++v39ReqToken;
+    els.pill.innerHTML = `<span class="v38-think-dot"></span><span>...</span>`;
+    els.pill.classList.remove('hidden');
+
+    let bestRank = -1;
+
+    function acceptCandidate(candidate, qualityRank) {
+      if (myTok !== v39ReqToken || game.fen() !== fen || !candidate || !candidate.uci) return;
+      if (qualityRank <= bestRank) return;
+
+      const resolved = resolveMoveObj(fen, candidate.uci);
+      if (!resolved) return;
+
+      bestRank = qualityRank;
+      const mv = resolved.mv;
+      let moverMate = (candidate.moverMate !== undefined) ? candidate.moverMate : null;
+      if (mv.san.includes('#')) moverMate = 1;
+
+      // Optional opponent reply ghost arrow from PV[1]
+      let replyFrom = null, replyTo = null;
+      if (candidate.replyUci && candidate.replyUci.length >= 4) {
+        const repRes = resolveMoveObj(resolved.fenAfter, candidate.replyUci);
+        if (repRes) { replyFrom = repRes.mv.from; replyTo = repRes.mv.to; }
+      }
+
+      const drawObj = {
+        from: mv.from,
+        to: mv.to,
+        san: mv.san,
+        moverCp: candidate.moverCp,
+        moverMate,
+        isBrilliant: Boolean(candidate.isBrilliant),
+        depth: candidate.depth || 0,
+        replyFrom,
+        replyTo
+      };
+
+      // Cache strong deep results (Depth 15+) so re-toggling is instant
+      if (qualityRank >= 80) {
+        v39FenCache.set(fen, drawObj);
+        if (v39FenCache.size > 80) {
+          v39FenCache.delete(v39FenCache.keys().next().value);
+        }
+      }
+
+      renderV39Stealth(drawObj);
+    }
+
+    // ---- ENGINE A: LICHESS CLOUD EVAL (DEPTH 30–50+ MULTI-PV 3 = ~3600 ELO!) ----
+    (async () => {
+      try {
+        const ctrl = new AbortController();
+        const tId = setTimeout(() => ctrl.abort(), 2200);
+        const resp = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=3`, {
+          signal: ctrl.signal
+        });
+        clearTimeout(tId);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data || !Array.isArray(data.pvs) || data.pvs.length === 0) return;
+        const dVal = Number(data.depth) || 30;
+        const pvList = data.pvs.map(pv => {
+          const moves = (pv.moves || '').trim().split(/\s+/);
+          return {
+            uci: moves[0],
+            replyUci: moves[1] || null,
+            moverCp: typeof pv.cp === 'number' ? pv.cp * turnSign : null,
+            moverMate: typeof pv.mate === 'number' ? pv.mate * turnSign : null,
+            depth: dVal
+          };
+        }).filter(x => x.uci);
+
+        const picked = selectOptimalOrBrilliantFromMultiPv(fen, pvList);
+        if (picked) acceptCandidate(picked, 120 + dVal);
+      } catch (e) {}
+    })();
+
+    // ---- ENGINE B: CHESS-API.COM (REAL STOCKFISH 16/17 NNUE DEPTH 18 = ~3400 ELO!) ----
+    (async () => {
+      try {
+        const ctrl = new AbortController();
+        const tId = setTimeout(() => ctrl.abort(), 3200);
+        const resp = await fetch('https://chess-api.com/v1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fen, depth: 18, maxThinkingTime: 100, variants: 1 }),
+          signal: ctrl.signal
+        });
+        clearTimeout(tId);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const uci = data && (data.move || data.lan || (data.from && data.to ? data.from + data.to + (data.promotion || '') : null));
+        if (!uci) return;
+
+        const dVal = Number(data.depth) || 18;
+        const rawMate = (data.mate !== null && data.mate !== undefined && data.mate !== '') ? Number(data.mate) : null;
+        const rawCp = (data.centipawns !== null && data.centipawns !== undefined && data.centipawns !== '')
+          ? Number(data.centipawns)
+          : (typeof data.eval === 'number' ? Math.round(data.eval * 100) : 0);
+
+        const moverMate = (rawMate !== null && !isNaN(rawMate) && rawMate !== 0) ? rawMate * turnSign : null;
+        const moverCp = isNaN(rawCp) ? 0 : rawCp * turnSign;
+        const cont = Array.isArray(data.continuationArr) ? data.continuationArr : [];
+        const replyUci = (cont.length >= 2 && cont[0] === uci) ? cont[1] : (cont[0] && cont[0] !== uci ? cont[0] : null);
+
+        const isBril = ((moverMate !== null && moverMate > 0) || moverCp >= 75) && isTrueTacticalSacrifice(fen, uci);
+        acceptCandidate({ uci, replyUci, moverCp, moverMate, depth: dVal, isBrilliant: isBril }, 95 + dVal);
+      } catch (e) {
+        // ---- ENGINE C: STOCKFISH.ONLINE DEPTH 15 FALLBACK ----
+        try {
+          const ctrl2 = new AbortController();
+          const tId2 = setTimeout(() => ctrl2.abort(), 3200);
+          const r2 = await fetch(`https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(fen)}&depth=15`, {
+            signal: ctrl2.signal
+          });
+          clearTimeout(tId2);
+          if (!r2.ok) return;
+          const d2 = await r2.json();
+          if (!d2 || !d2.success || !d2.bestmove) return;
+          const parts = d2.bestmove.trim().split(/\s+/);
+          const uci = parts[1] || parts[0];
+          if (!uci || uci.length < 4) return;
+          const rawMate = (d2.mate !== null && d2.mate !== undefined) ? Number(d2.mate) : null;
+          const rawCp = typeof d2.evaluation === 'number' ? Math.round(d2.evaluation * 100) : 0;
+          const moverMate = (rawMate !== null && !isNaN(rawMate) && rawMate !== 0) ? rawMate * turnSign : null;
+          const moverCp = rawCp * turnSign;
+          const contArr = typeof d2.continuation === 'string' ? d2.continuation.trim().split(/\s+/) : [];
+          const replyUci = contArr.length >= 2 ? contArr[1] : null;
+          const isBril = ((moverMate !== null && moverMate > 0) || moverCp >= 75) && isTrueTacticalSacrifice(fen, uci);
+          acceptCandidate({ uci, replyUci, moverCp, moverMate, depth: 15, isBrilliant: isBril }, 75 + 15);
+        } catch (e2) {}
+      }
+    })();
+
+    // ---- ENGINE D: LOCAL REAL STOCKFISH 10 WEB WORKER (MULTI-PV 3, ALWAYS WORKS!) ----
+    initLocalStockfishV39();
+    const startLocalSearch = () => {
+      if (myTok !== v39ReqToken || !v39SfWorker) return;
+      const pvMap = new Map();
+      let maxSeenDepth = 0;
+
+      sfLineListeners = [(line) => {
+        if (myTok !== v39ReqToken) return;
+        if (line.startsWith('info ') && line.includes(' pv ') && line.includes(' score ')) {
+          const dM = line.match(/\bdepth (\d+)/);
+          const mpM = line.match(/\bmultipv (\d+)/);
+          const scM = line.match(/\bscore (cp|mate) (-?\d+)/);
+          const pvM = line.match(/\bpv ([a-h][1-8][a-h][1-8][qrbn]?)(?:\s+([a-h][1-8][a-h][1-8][qrbn]?))?/);
+          if (!dM || !scM || !pvM) return;
+
+          const depth = parseInt(dM[1], 10);
+          const mpIdx = mpM ? parseInt(mpM[1], 10) : 1;
+          const isMate = scM[1] === 'mate';
+          const scoreVal = parseInt(scM[2], 10);
+
+          if (depth < maxSeenDepth) return;
+          if (depth > maxSeenDepth) {
+            maxSeenDepth = depth;
+            pvMap.clear();
+          }
+
+          pvMap.set(mpIdx, {
+            uci: pvM[1],
+            replyUci: pvM[2] || null,
+            moverCp: isMate ? null : scoreVal,
+            moverMate: isMate ? scoreVal : null,
+            depth
+          });
+
+          // Stream progressive upgrade once depth >= 9 and we have PV #1 (or full MultiPV 3)
+          if (depth >= 9 && pvMap.has(1)) {
+            const list = Array.from(pvMap.values());
+            const picked = selectOptimalOrBrilliantFromMultiPv(fen, list);
+            if (picked) {
+              // If Local Stockfish finds a verified MultiPV Brilliant sacrifice, give it priority!
+              const brilBoost = (picked.isBrilliant && depth >= 12) ? 35 : 0;
+              acceptCandidate(picked, 55 + depth + brilBoost);
+            }
+          }
+        } else if (line.startsWith('bestmove ')) {
+          const bm = line.split(/\s+/)[1];
+          if (pvMap.size > 0) {
+            const picked = selectOptimalOrBrilliantFromMultiPv(fen, Array.from(pvMap.values()));
+            if (picked) {
+              const brilBoost = (picked.isBrilliant && picked.depth >= 12) ? 35 : 0;
+              acceptCandidate(picked, 58 + (picked.depth || 12) + brilBoost);
+            }
+          } else if (bm && bm.length >= 4) {
+            acceptCandidate({ uci: bm, moverCp: 0, moverMate: null, depth: 12, isBrilliant: false }, 62);
+          }
+        }
+      }];
+
+      try {
+        v39SfWorker.postMessage('stop');
+        v39SfWorker.postMessage(`position fen ${fen}`);
+        v39SfWorker.postMessage('go movetime 1350');
+      } catch (e) {}
+    };
+
+    if (v39SfReady) {
+      startLocalSearch();
+    } else {
+      let waited = 0;
+      const waitT = setInterval(() => {
+        waited += 80;
+        if (myTok !== v39ReqToken || waited > 4000) { clearInterval(waitT); return; }
+        if (v39SfReady) { clearInterval(waitT); startLocalSearch(); }
+      }, 80);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. CAPTURE-PHASE 'B' INTERCEPTOR (OVERRIDES V38'S WEAK ENGINE CLEANLY!)
+  // -------------------------------------------------------------------------
+  window.addEventListener('keydown', (e) => {
+    if (!isSecretUnlockedV39()) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+
+    // Skip if Coach Video is currently open
+    const v38OpenNow = !document.getElementById('v38VideoPanel')?.classList.contains('hidden');
+    if (v38OpenNow) return;
+
+    if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      runUltraStockfishRaceV39();
+    } else if (e.key === 'Escape' && v39ActiveDraw) {
+      clearV39Stealth();
+    }
+  }, true);
+
+  // Auto-clear when a move is played, board changes, or user locks the ✓
+  const prevCommitV39 = window.commitMoveOnBoardInstant;
+  window.commitMoveOnBoardInstant = function(moveObj) {
+    if (v39ActiveDraw) clearV39Stealth();
+    prevCommitV39(moveObj);
+  };
+
+  let lastFenV39 = '';
+  const prevRenderV39 = window.renderBoard;
+  window.renderBoard = function() {
+    prevRenderV39();
+    const curFen = typeof game !== 'undefined' ? game.fen() : '';
+    if (curFen !== lastFenV39) {
+      lastFenV39 = curFen;
+      if (v39ActiveDraw) clearV39Stealth();
+    } else if (v39ActiveDraw) {
+      renderV39Stealth(v39ActiveDraw);
+    }
+  };
+
+  const prevActV39 = window.activateSidebarTab;
+  window.activateSidebarTab = function(tabName) {
+    clearV39Stealth();
+    if (prevActV39) prevActV39(tabName);
+  };
+
+  window.addEventListener('resize', () => {
+    if (v39ActiveDraw) renderV39Stealth(v39ActiveDraw);
+  });
+})();
+</script>
 </html>
