@@ -51221,4 +51221,241 @@
   renderClimbMapV44();
 })();
 </script>
+<!-- ===================================================================== -->
+<!-- 🧹 V45 CLEANUP & ACCURACY PATCH                                       -->
+<!--    1. Completely removes Climb tab & restores clean 5-tab native app  -->
+<!--    2. Kills fake King/shuffle Brilliant (!!) moves & fixes counts     -->
+<!--    3. Fixes "King forced to move with Rg2" text hallucination         -->
+<!--    4. Moves Animate Line popup off the chessboard & hides coach head  -->
+<!--    Paste right before </html> at the bottom of index.html             -->
+<!-- ===================================================================== -->
+<script>
+(function applyCleanupAndTruthPatchV45() {
+  const PNAME = { R: 'Rook', Q: 'Queen', B: 'Bishop', N: 'Knight', K: 'King' };
+
+  // -------------------------------------------------------------------------
+  // 1. REMOVE CLIMB COMPLETELY & FIX FLOATING PROOF POPUP OVERLAYS
+  // -------------------------------------------------------------------------
+  const cssV45 = document.createElement('style');
+  cssV45.textContent = `
+    /* Permanently remove Climb tab, Climb overlays, and V43 duplicate arrows */
+    #v43ClimbTabBtn,
+    #tabContentClimb,
+    #v43OnScreenHud,
+    #v43RightClickSvg,
+    #v43ClimbBoardSvg,
+    #v43CountdownOverlay,
+    #v43BoardToast,
+    #v44TopBar,
+    #v44BottomBanner,
+    #v44Countdown,
+    #v44ClimbSvg {
+      display: none !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    /* Hide the floating cartoon coach head that covers pieces on the board */
+    #hoverCoachPod,
+    #hoverCoachAvatar,
+    .hover-coach-avatar,
+    #hoverCoachStage img,
+    #hoverCoachStage .coach-float-head {
+      display: none !important;
+    }
+
+    /* Dock the Animate-Line speech card cleanly in the bottom-right (OFF the chessboard!) */
+    #hoverCoachStage {
+      position: fixed !important;
+      top: auto !important;
+      left: auto !important;
+      right: 16px !important;
+      bottom: 16px !important;
+      width: 330px !important;
+      max-width: calc(100vw - 32px) !important;
+      height: auto !important;
+      inset: auto 16px 16px auto !important;
+      transform: none !important;
+      z-index: 9500 !important;
+      pointer-events: auto !important;
+    }
+    #hoverCoachStage > div {
+      position: static !important;
+      transform: none !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      margin: 0 !important;
+    }
+  `;
+  document.head.appendChild(cssV45);
+
+  // Cleanly remove Climb button/panel from DOM & restore crisp 5-column tab bar
+  function removeClimbDomV45() {
+    document.body.classList.remove('v43-climb-live', 'v44-climb-live');
+    const climbBtn = document.getElementById('v43ClimbTabBtn');
+    const tabBar = climbBtn ? climbBtn.parentElement : document.querySelector('.sidebar-tab')?.parentElement;
+    if (climbBtn) climbBtn.remove();
+    document.getElementById('tabContentClimb')?.remove();
+    ['v43OnScreenHud', 'v43RightClickSvg', 'v43ClimbBoardSvg', 'v43CountdownOverlay', 'v43BoardToast',
+     'v44TopBar', 'v44BottomBanner', 'v44Countdown', 'v44ClimbSvg'].forEach(id => {
+      document.getElementById(id)?.remove();
+    });
+    if (tabBar) {
+      tabBar.classList.remove('grid-cols-6', 'grid-cols-4');
+      tabBar.classList.add('grid-cols-5');
+      tabBar.querySelectorAll('.sidebar-tab').forEach(b => {
+        b.style.fontSize = '';
+        b.style.paddingLeft = '';
+        b.style.paddingRight = '';
+      });
+    }
+  }
+  removeClimbDomV45();
+
+  // Redirect any stale 'climb' tab call cleanly to 'coach'
+  const prevActivateV45 = window.activateSidebarTab;
+  window.activateSidebarTab = function(tabName) {
+    if (tabName === 'climb') tabName = 'coach';
+    window.demoOverrideFen = null;
+    if (prevActivateV45) prevActivateV45(tabName);
+  };
+
+  // -------------------------------------------------------------------------
+  // 2. AUDIT & KILL FAKE BRILLIANT MOVES (NO KING SHUFFLES / NO +9 HANDOUTS!)
+  // -------------------------------------------------------------------------
+  function isFakeBrilliantStep(st) {
+    if (!st || !st.classification || st.classification.key !== 'brilliant') return false;
+    const mv = st.moveObj;
+    if (!mv) return true;
+
+    const sign = mv.color === 'w' ? 1 : -1;
+    const evBefore = (Number(st.evalBeforeWhiteCp) || 0) * sign;
+    const evAfter  = (Number(st.evalAfterWhiteCp) || 0) * sign;
+    const loss     = Number(st.cpLoss) || 0;
+    const comment  = String(st.coachComment || '');
+
+    // 1. King moves are almost never true Brilliant sacrifices (and never when hanging another piece!)
+    if (mv.piece === 'k') return true;
+
+    // 2. If the move actually lost significant evaluation (> 65 cp) vs the best move, it is NOT Brilliant
+    if (loss > 65) return true;
+
+    // 3. Already completely crushing (+5.0 or more) and evaluation dropped — just hanging a piece while ahead!
+    if (evBefore >= 500 && evAfter < evBefore - 100) return true;
+
+    // 4. Resulting position is still bad/losing (not a real tactical resource)
+    if (evAfter < 40 && !(evBefore <= -250 && evAfter >= -40)) return true;
+
+    // 5. Catch nonsense King-shuffle proof strings (e.g. "answer with Kh3 followed by Kh4")
+    if (/answer with K[a-h][1-8].*followed by K[a-h][1-8]/i.test(comment)) return true;
+
+    // 6. Verify proof branches actually exist and don't just repeat King moves
+    const info = st.brilliantInfoV21;
+    if (info && Array.isArray(info.branches) && info.branches.length > 0) {
+      const br = info.branches[0];
+      if (br && Array.isArray(br.punishLine) && br.punishLine.length >= 2) {
+        const p0 = br.punishLine[0], p1 = br.punishLine[1];
+        if (p0 && p1 && p0.piece === 'k' && p1.piece === 'k') return true;
+      }
+    }
+
+    return false;
+  }
+
+  function sanitizeTimelineBrilliantsV45() {
+    if (!Array.isArray(timeline) || typeof CLASSIFICATIONS === 'undefined') return;
+    for (let i = 0; i < timeline.length; i++) {
+      const st = timeline[i];
+      if (!isFakeBrilliantStep(st)) continue;
+
+      const mv = st.moveObj;
+      const loss = Number(st.cpLoss) || 0;
+      const san = (mv && mv.san) ? mv.san : (st.san || 'This move');
+
+      if (loss <= 20) {
+        st.classification = CLASSIFICATIONS.best;
+        st.coachComment = `${san} is a strong move that keeps your position solid.`;
+      } else if (loss <= 75) {
+        st.classification = CLASSIFICATIONS.good;
+        st.coachComment = `${san} keeps you ahead, though there was a cleaner continuation.`;
+      } else if (loss <= 170) {
+        st.classification = CLASSIFICATIONS.inaccuracy;
+        st.coachComment = `${san} gave away some advantage—watch out for undefended pieces.`;
+      } else {
+        st.classification = CLASSIFICATIONS.mistake;
+        st.coachComment = `${san} left material vulnerable and dropped evaluation.`;
+      }
+
+      // Remove broken proof data so "Animate Line on Board" won't run bogus lines
+      st.brilliantInfoV21 = null;
+    }
+  }
+
+  // Hook both Review and Coach Move-List renderers so fake Brilliants are scrubbed before display
+  if (typeof window.updateGameReviewTabUI === 'function') {
+    const origReviewV45 = window.updateGameReviewTabUI;
+    window.updateGameReviewTabUI = function() {
+      sanitizeTimelineBrilliantsV45();
+      return origReviewV45.apply(this, arguments);
+    };
+  }
+
+  if (typeof window.updateCoachAndMoveListUI === 'function') {
+    const origCoachUiV45 = window.updateCoachAndMoveListUI;
+    window.updateCoachAndMoveListUI = function() {
+      sanitizeTimelineBrilliantsV45();
+      return origCoachUiV45.apply(this, arguments);
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. FIX "KING IS FORCED TO MOVE OUT OF CHECK WITH RG2!" IN REAL TIME
+  // -------------------------------------------------------------------------
+  function fixCheckReplyText(str) {
+    if (!str || !/King is forced to move out of check with/i.test(str)) return str;
+    return str.replace(
+      /Their King is forced to move out of check with\s+([A-Za-z0-9+#=x-]+)(!?)/gi,
+      (full, san, bang) => {
+        if (!san || san[0] === 'K' || san.startsWith('O-O')) return full;
+        const pName = PNAME[san[0]] || 'Pawn';
+        const isCap = san.includes('x');
+        return isCap
+          ? `Their ${pName} stops the check by capturing with ${san}${bang}`
+          : `Their ${pName} is forced to block the check with ${san}${bang}`;
+      }
+    );
+  }
+
+  function scrubBubbleTextNodes(root) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeValue && /King is forced to move out of check with/i.test(node.nodeValue)) {
+        node.nodeValue = fixCheckReplyText(node.nodeValue);
+      }
+    }
+  }
+
+  if (typeof MutationObserver !== 'undefined') {
+    const textFixObs = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'characterData' && m.target.nodeValue) {
+          const fixed = fixCheckReplyText(m.target.nodeValue);
+          if (fixed !== m.target.nodeValue) m.target.nodeValue = fixed;
+        } else if (m.addedNodes && m.addedNodes.length) {
+          m.addedNodes.forEach(n => {
+            if (n.nodeType === 1) scrubBubbleTextNodes(n);
+            else if (n.nodeType === 3 && n.nodeValue) {
+              const fixed = fixCheckReplyText(n.nodeValue);
+              if (fixed !== n.nodeValue) n.nodeValue = fixed;
+            }
+          });
+        }
+      }
+    });
+    textFixObs.observe(document.body, { childList: true, subtree: true, characterData: true });
+  }
+})();
+</script>
 </html>
