@@ -37072,4 +37072,1276 @@
   }
 })();
 </script>
+  <!-- ===================================================================== -->
+<!-- ⚡ V35 UNBREAKABLE ONLINE 1v1 ENGINE (PORT-443 MQTT + AUTO-FAILOVER)  -->
+<!--    1. Eliminates ntfy.sh 429 rate-limit freezes deep in games         -->
+<!--    2. Full movesSan state sync + automatic ACK & retry (no deadlocks) -->
+<!--    3. Live status pill, 🔄 Sync button, clocks & unfiltered chat      -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyBulletproofOnlineEngineV35() {
+  const STD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const NTFY_BASE = 'https://ntfy.sh';
+  const MQTT_URL = 'wss://mqtt.eclipseprojects.io:443/mqtt';
+  const MY_ID = 'u_' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+
+  // Cleanly stop any old V31/V24 online channels so nothing collides
+  function killAllLegacyOnline() {
+    try { if (window._v31HostPingTimer) clearInterval(window._v31HostPingTimer); } catch (e) {}
+    try { if (window._v31GuestPingTimer) clearInterval(window._v31GuestPingTimer); } catch (e) {}
+    try { if (window._v31QmPingTimer) clearInterval(window._v31QmPingTimer); } catch (e) {}
+    try { if (window._v31QmEmptyTimer) clearTimeout(window._v31QmEmptyTimer); } catch (e) {}
+    try { if (window._v31HeartbeatTimer) clearInterval(window._v31HeartbeatTimer); } catch (e) {}
+    try { if (window._v31RoomChannel) window._v31RoomChannel.close(); } catch (e) {}
+    try { if (window._v31LobbyChannel) window._v31LobbyChannel.close(); } catch (e) {}
+    try { if (window._onlineConn) window._onlineConn.close(); } catch (e) {}
+    try { if (window._onlinePeer) window._onlinePeer.destroy(); } catch (e) {}
+    window._v31RoomChannel = null;
+    window._v31LobbyChannel = null;
+    window._onlineConn = null;
+    window._onlinePeer = null;
+  }
+
+  // Load MQTT.js dynamically on demand (Port 443 WSS, zero 429 limits!)
+  let mqttLoaderPromise = null;
+  function ensureMqttLoadedV35() {
+    if (window.mqtt) return Promise.resolve(window.mqtt);
+    if (mqttLoaderPromise) return mqttLoaderPromise;
+    mqttLoaderPromise = new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js';
+      s.onload = () => resolve(window.mqtt || null);
+      s.onerror = () => {
+        const s2 = document.createElement('script');
+        s2.src = 'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js';
+        s2.onload = () => resolve(window.mqtt || null);
+        s2.onerror = () => resolve(null);
+        document.head.appendChild(s2);
+      };
+      document.head.appendChild(s);
+    });
+    return mqttLoaderPromise;
+  }
+
+  // -------------------------------------------------------------------------
+  // 1. HYBRID DUAL-TRANSPORT CHANNEL (MQTT PORT 443 PRIMARY + NTFY BACKUP)
+  //    Subscribes to BOTH; publishes on MQTT (unlimited) with automatic
+  //    ntfy.sh fallback only if MQTT is unreachable — ZERO heartbeats!
+  // -------------------------------------------------------------------------
+  class V35HybridChannel {
+    constructor(topicId, onMsg, opts = {}) {
+      this.topicId = topicId;
+      this.mqttTopic = `gmchess_pro_v35/${topicId}`;
+      this.ntfyTopic = `gmchess_v35_${topicId}`;
+      this.onMsg = onMsg;
+      this.onStatus = opts.onStatus || null;
+      this.willPayload = opts.willPayload || null;
+      this.since = opts.since || '45s';
+      this.closed = false;
+      this.seen = new Set();
+      this.mqttClient = null;
+      this.mqttConnected = false;
+      this.ntfyWs = null;
+      this.ntfyEs = null;
+      this.peerNeedsNtfy = false;
+
+      this.connectMqtt();
+      this.connectNtfyPassive();
+    }
+
+    setStatus(state) {
+      if (this.onStatus) this.onStatus(state);
+    }
+
+    connectMqtt() {
+      ensureMqttLoadedV35().then((mqttLib) => {
+        if (this.closed || !mqttLib) return;
+        try {
+          const connectOpts = {
+            clientId: 'gmc_' + MY_ID + '_' + Math.random().toString(36).slice(2, 5),
+            clean: true,
+            connectTimeout: 6000,
+            reconnectPeriod: 2500,
+            keepalive: 25
+          };
+          if (this.willPayload) {
+            connectOpts.will = {
+              topic: this.mqttTopic,
+              payload: JSON.stringify({ ...this.willPayload, _sid: MY_ID, _mid: 'lwt_' + Date.now() }),
+              qos: 1,
+              retain: false
+            };
+          }
+          const client = mqttLib.connect(MQTT_URL, connectOpts);
+          this.mqttClient = client;
+
+          client.on('connect', () => {
+            if (this.closed) { try { client.end(true); } catch (e) {} return; }
+            this.mqttConnected = true;
+            client.subscribe(this.mqttTopic, { qos: 1 });
+            this.setStatus('live');
+          });
+          client.on('reconnect', () => {
+            this.mqttConnected = false;
+            this.setStatus('reconnecting');
+          });
+          client.on('offline', () => {
+            this.mqttConnected = false;
+            this.setStatus('reconnecting');
+          });
+          client.on('error', () => {
+            this.mqttConnected = false;
+          });
+          client.on('message', (_topic, buf) => {
+            if (this.closed) return;
+            try {
+              const txt = typeof buf === 'string' ? buf : buf.toString('utf8');
+              this.handleIncoming(JSON.parse(txt), 'mqtt');
+            } catch (e) {}
+          });
+        } catch (e) {}
+      });
+    }
+
+    // Passive ntfy WebSocket listener (costs ZERO publish quota; catches fallback packets!)
+    connectNtfyPassive() {
+      if (this.closed) return;
+      try {
+        const ws = new WebSocket(`wss://ntfy.sh/${encodeURIComponent(this.ntfyTopic)}/ws?since=${this.since}`);
+        this.ntfyWs = ws;
+        let opened = false;
+        ws.onopen = () => {
+          opened = true;
+          if (!this.mqttConnected) this.setStatus('live');
+        };
+        ws.onmessage = (ev) => {
+          if (this.closed || !ev.data) return;
+          try {
+            const outer = JSON.parse(ev.data);
+            if (outer.event === 'message' && outer.message) {
+              this.handleIncoming(JSON.parse(outer.message), 'ntfy');
+            }
+          } catch (e) {}
+        };
+        ws.onerror = () => {
+          if (!opened && !this.closed) {
+            try { ws.close(); } catch (e) {}
+            this.connectNtfySse();
+          }
+        };
+        ws.onclose = () => {
+          if (!this.closed && opened) {
+            setTimeout(() => { this.since = '10s'; this.connectNtfyPassive(); }, 2500);
+          }
+        };
+      } catch (e) {
+        this.connectNtfySse();
+      }
+    }
+
+    connectNtfySse() {
+      if (this.closed || this.ntfyEs) return;
+      try {
+        const es = new EventSource(`${NTFY_BASE}/${encodeURIComponent(this.ntfyTopic)}/sse?since=${this.since}`);
+        this.ntfyEs = es;
+        es.onmessage = (ev) => {
+          if (this.closed || !ev.data) return;
+          try {
+            const outer = JSON.parse(ev.data);
+            if (outer.event === 'message' && outer.message) {
+              this.handleIncoming(JSON.parse(outer.message), 'ntfy');
+            }
+          } catch (e) {}
+        };
+      } catch (e) {}
+    }
+
+    handleIncoming(obj, via) {
+      if (this.closed || !obj || obj._sid === MY_ID) return;
+      if (obj._mid && this.seen.has(obj._mid)) return;
+      if (obj._mid) {
+        this.seen.add(obj._mid);
+        if (this.seen.size > 500) {
+          const first = this.seen.values().next().value;
+          this.seen.delete(first);
+        }
+      }
+      if (via === 'ntfy' && !this.mqttConnected) this.peerNeedsNtfy = true;
+      if (obj._noMqtt) this.peerNeedsNtfy = true;
+      if (this.onMsg) this.onMsg(obj, via);
+    }
+
+    send(payloadObj, forceNtfy = false) {
+      if (this.closed) return;
+      const packet = {
+        ...payloadObj,
+        _sid: MY_ID,
+        _mid: payloadObj._mid || (Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-3)),
+        _ts: Date.now(),
+        _noMqtt: !this.mqttConnected
+      };
+      const bodyStr = JSON.stringify(packet);
+
+      let sentMqtt = false;
+      if (this.mqttClient && this.mqttConnected) {
+        try {
+          this.mqttClient.publish(this.mqttTopic, bodyStr, { qos: 1 });
+          sentMqtt = true;
+        } catch (e) {}
+      }
+
+      // Only POST to ntfy if MQTT isn't connected, peer needs ntfy, or caller explicitly requests backup delivery!
+      if (!sentMqtt || forceNtfy || this.peerNeedsNtfy) {
+        fetch(`${NTFY_BASE}/${encodeURIComponent(this.ntfyTopic)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: bodyStr,
+          keepalive: true
+        }).catch(() => {});
+      }
+    }
+
+    sendBeacon(payloadObj) {
+      const packet = {
+        ...payloadObj,
+        _sid: MY_ID,
+        _mid: 'bcn_' + Date.now(),
+        _ts: Date.now()
+      };
+      const bodyStr = JSON.stringify(packet);
+      if (this.mqttClient && this.mqttConnected) {
+        try { this.mqttClient.publish(this.mqttTopic, bodyStr, { qos: 1 }); } catch (e) {}
+      }
+      try { navigator.sendBeacon(`${NTFY_BASE}/${encodeURIComponent(this.ntfyTopic)}`, bodyStr); } catch (e) {}
+    }
+
+    close() {
+      this.closed = true;
+      this.mqttConnected = false;
+      try { if (this.mqttClient) this.mqttClient.end(true); } catch (e) {}
+      try { if (this.ntfyWs) this.ntfyWs.close(); } catch (e) {}
+      try { if (this.ntfyEs) this.ntfyEs.close(); } catch (e) {}
+      this.mqttClient = null;
+      this.ntfyWs = null;
+      this.ntfyEs = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 2. ONLINE STATE, ACK/RETRY QUEUE & SYNCED TOURNAMENT CLOCKS
+  // -------------------------------------------------------------------------
+  window._v35Room = null;
+  window._v35Lobby = null;
+  let v35Timers = [];
+  let v35AckRetryTimer = null;
+  let v35PendingMovePacket = null;
+  let v35RetryCount = 0;
+
+  let v35Clock = {
+    active: false,
+    wMs: 300000,
+    bMs: 300000,
+    lastTick: 0,
+    interval: null,
+    beeped: { w: false, b: false }
+  };
+
+  function addV35Timer(id, isInterval = false) {
+    v35Timers.push({ id, isInterval });
+    return id;
+  }
+
+  function clearAllV35Online() {
+    killAllLegacyOnline();
+    v35Timers.forEach(t => t.isInterval ? clearInterval(t.id) : clearTimeout(t.id));
+    v35Timers = [];
+    if (v35AckRetryTimer) { clearTimeout(v35AckRetryTimer); v35AckRetryTimer = null; }
+    v35PendingMovePacket = null;
+    v35RetryCount = 0;
+    stopV35OnlineClock();
+    if (window._v35Room) { window._v35Room.close(); window._v35Room = null; }
+    if (window._v35Lobby) { window._v35Lobby.close(); window._v35Lobby = null; }
+  }
+
+  function formatV35Clock(ms) {
+    const c = Math.max(0, ms);
+    const sec = c / 1000;
+    if (sec < 10) return `0:0${Math.floor(sec)}.${Math.floor((c % 1000) / 100)}`;
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+
+  function stopV35OnlineClock() {
+    v35Clock.active = false;
+    if (v35Clock.interval) { clearInterval(v35Clock.interval); v35Clock.interval = null; }
+  }
+
+  function renderV35Clocks() {
+    const cTop = document.getElementById('v24TopBoardClock');
+    const cBot = document.getElementById('v24BotBoardClock');
+    if (!cTop || !cBot) return;
+    const show = Boolean(window._isOnlineMatch && window._matchRules && window._matchRules.timerType !== 'none' && !isLessonMode && !isEditorMode);
+    cTop.classList.toggle('hidden', !show);
+    cBot.classList.toggle('hidden', !show);
+    if (!show) return;
+
+    const botSide = boardFlipped ? 'b' : 'w';
+    const topSide = botSide === 'w' ? 'b' : 'w';
+    const turn = game.turn();
+    const botMs = botSide === 'w' ? v35Clock.wMs : v35Clock.bMs;
+    const topMs = topSide === 'w' ? v35Clock.wMs : v35Clock.bMs;
+
+    cBot.textContent = formatV35Clock(botMs);
+    cTop.textContent = formatV35Clock(topMs);
+
+    const botAct = v35Clock.active && !window._twoPlayerMatchEnded && !game.game_over() && turn === botSide;
+    const topAct = v35Clock.active && !window._twoPlayerMatchEnded && !game.game_over() && turn === topSide;
+    cBot.classList.toggle('clock-active', botAct);
+    cTop.classList.toggle('clock-active', topAct);
+    cBot.classList.toggle('clock-low', botAct && botMs <= 10000);
+    cTop.classList.toggle('clock-low', topAct && topMs <= 10000);
+  }
+
+  function startV35OnlineClock() {
+    stopV35OnlineClock();
+    if (!window._matchRules || window._matchRules.timerType === 'none') {
+      renderV35Clocks();
+      return;
+    }
+    const startMs = window._matchRules.timerType === 'per_move'
+      ? (window._matchRules.perMoveSeconds || 30) * 1000
+      : (window._matchRules.totalSeconds || 300) * 1000;
+
+    v35Clock.wMs = startMs;
+    v35Clock.bMs = startMs;
+    v35Clock.beeped = { w: false, b: false };
+    v35Clock.active = true;
+    v35Clock.lastTick = Date.now();
+    renderV35Clocks();
+
+    v35Clock.interval = setInterval(() => {
+      if (!v35Clock.active || !window._isOnlineMatch || window._twoPlayerMatchEnded || game.game_over()) {
+        stopV35OnlineClock();
+        return;
+      }
+      const now = Date.now();
+      const dt = Math.min(250, now - v35Clock.lastTick);
+      v35Clock.lastTick = now;
+      const side = game.turn();
+      if (side === 'w') v35Clock.wMs = Math.max(0, v35Clock.wMs - dt);
+      else v35Clock.bMs = Math.max(0, v35Clock.bMs - dt);
+
+      const rem = side === 'w' ? v35Clock.wMs : v35Clock.bMs;
+      if (rem <= 10000 && rem > 0 && !v35Clock.beeped[side]) {
+        v35Clock.beeped[side] = true;
+        try { playChessSound('check'); } catch (e) {}
+      }
+      renderV35Clocks();
+
+      // Only the side that flagged declares timeout (prevents race conditions!)
+      if (rem <= 0 && side === window._onlineMyColor) {
+        stopV35OnlineClock();
+        const myName = side === 'w' ? window._twoPlayerNames.w : window._twoPlayerNames.b;
+        const msg = `⏰ ${myName} ran out of time!`;
+        if (window._v35Room) window._v35Room.send({ type: 'TIMEOUT', loserSide: side, msg }, true);
+        finishV35OnlineMatch(msg, side === 'w' ? 'b' : 'w');
+      }
+    }, 100);
+  }
+
+  function tickV35ClockOnMove(moverSide) {
+    if (!v35Clock.active || !window._matchRules || window._matchRules.timerType === 'none') return;
+    if (window._matchRules.timerType === 'per_move') {
+      const rMs = (window._matchRules.perMoveSeconds || 30) * 1000;
+      v35Clock.wMs = rMs;
+      v35Clock.bMs = rMs;
+      v35Clock.beeped = { w: false, b: false };
+    } else if (window._matchRules.timerType === 'total' && window._matchRules.incrementSec > 0) {
+      const inc = window._matchRules.incrementSec * 1000;
+      if (moverSide === 'w') v35Clock.wMs += inc;
+      else v35Clock.bMs += inc;
+    }
+    v35Clock.lastTick = Date.now();
+    renderV35Clocks();
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. SELF-HEALING BOARD SYNC (REBUILDS FROM movesSan IF ANY PACKET MISSED!)
+  // -------------------------------------------------------------------------
+  function rebuildBoardFromMovesSanV35(movesSanArr) {
+    if (!Array.isArray(movesSanArr)) return false;
+    const sim = new Chess(STD_FEN);
+    const rebuilt = [];
+    for (let i = 0; i < movesSanArr.length; i++) {
+      const fenBefore = sim.fen();
+      const mv = sim.move(movesSanArr[i]);
+      if (!mv) return false;
+      rebuilt.push({
+        fenBefore,
+        fenAfter: sim.fen(),
+        moveObj: mv,
+        san: mv.san,
+        evalBeforeWhiteCp: 0,
+        evalAfterWhiteCp: 0,
+        bestMoveBefore: null,
+        bestPvBefore: [],
+        oppBestReply: null,
+        cpLoss: 0,
+        classification: { key: 'hidden', label: '', symbol: '', color: '#55534f' },
+        coachComment: '',
+        openingName: '',
+        multiPv: [],
+        _deepAnalyzedV21: true
+      });
+    }
+
+    game.load(sim.fen());
+    timeline = rebuilt;
+    viewPlyIndex = timeline.length - 1;
+    selectedSq = null;
+    legalMovesFromSelected = [];
+    lastLandedSquare = rebuilt.length > 0 ? rebuilt[rebuilt.length - 1].moveObj.to : null;
+    window._savedCoachMatchFen = game.fen();
+    return true;
+  }
+
+  function applyIncomingMoveOrSyncV35(data) {
+    if (window._twoPlayerMatchEnded) return;
+
+    const incomingPly = Number(data.ply) || (Array.isArray(data.movesSan) ? data.movesSan.length : 0);
+    const currentPly = timeline.length;
+
+    // Already up-to-date or ahead? Just ACK back (or push our newer state if we are ahead!)
+    if (incomingPly <= currentPly) {
+      if (window._v35Room) {
+        window._v35Room.send({ type: 'ACK', ply: currentPly });
+        if (incomingPly < currentPly && data.type === 'STATE_SYNC') {
+          window._v35Room.send({
+            type: 'STATE_SYNC',
+            ply: currentPly,
+            movesSan: timeline.map(t => t.san),
+            wMs: v35Clock.wMs,
+            bMs: v35Clock.bMs
+          });
+        }
+      }
+      return;
+    }
+
+    let applied = false;
+    let lastMvObj = null;
+
+    // Fast path: exact next ply
+    if (incomingPly === currentPly + 1 && data.from && data.to) {
+      const fenBefore = game.fen();
+      const mv = game.move({ from: data.from, to: data.to, promotion: data.promotion || 'q' });
+      if (mv) {
+        lastMvObj = mv;
+        timeline.push({
+          fenBefore,
+          fenAfter: game.fen(),
+          moveObj: mv,
+          san: mv.san,
+          evalBeforeWhiteCp: 0,
+          evalAfterWhiteCp: 0,
+          bestMoveBefore: null,
+          bestPvBefore: [],
+          oppBestReply: null,
+          cpLoss: 0,
+          classification: { key: 'hidden', label: '', symbol: '', color: '#55534f' },
+          coachComment: '',
+          openingName: '',
+          multiPv: [],
+          _deepAnalyzedV21: true
+        });
+        viewPlyIndex = timeline.length - 1;
+        selectedSq = null;
+        legalMovesFromSelected = [];
+        lastLandedSquare = mv.to;
+        window._savedCoachMatchFen = game.fen();
+        applied = true;
+      }
+    }
+
+    // Self-healing path: missed 1+ moves or slight desync -> rebuild exact board from movesSan!
+    if (!applied && Array.isArray(data.movesSan) && data.movesSan.length > currentPly) {
+      applied = rebuildBoardFromMovesSanV35(data.movesSan);
+      if (applied && timeline.length > 0) lastMvObj = timeline[timeline.length - 1].moveObj;
+    }
+
+    if (applied) {
+      // Clear any pending retry of our previous move since opponent clearly received it!
+      if (v35AckRetryTimer) { clearTimeout(v35AckRetryTimer); v35AckRetryTimer = null; }
+      v35PendingMovePacket = null;
+
+      if (typeof data.wMs === 'number') v35Clock.wMs = data.wMs;
+      if (typeof data.bMs === 'number') v35Clock.bMs = data.bMs;
+      v35Clock.lastTick = Date.now();
+
+      isGameActive = true;
+      try {
+        playChessSound(game.game_over() ? 'gameover' : (game.in_check() ? 'check' : (lastMvObj && lastMvObj.captured ? 'capture' : 'move')));
+      } catch (e) {}
+
+      // Immediately ACK receipt so opponent stops retrying!
+      if (window._v35Room) {
+        window._v35Room.send({ type: 'ACK', ply: timeline.length });
+      }
+
+      updateV35OnlineHeaders();
+      window.renderBoard();
+      window.updateCoachAndMoveListUI();
+
+      if (game.game_over()) {
+        finishV35OnlineMatch(null, null);
+      }
+    }
+  }
+
+  function scheduleMoveAckRetryV35(packet) {
+    if (v35AckRetryTimer) { clearTimeout(v35AckRetryTimer); v35AckRetryTimer = null; }
+    v35PendingMovePacket = packet;
+    v35RetryCount = 0;
+
+    const attemptRetry = () => {
+      if (!v35PendingMovePacket || !window._v35Room || !window._isOnlineMatch || window._twoPlayerMatchEnded) return;
+      if (timeline.length > v35PendingMovePacket.ply) {
+        v35PendingMovePacket = null;
+        return;
+      }
+      v35RetryCount++;
+      setV35ConnBadge('syncing');
+
+      // On retry 2+, also mirror over ntfy.sh fallback so even asymmetric firewalls get the move!
+      const useFallback = (v35RetryCount >= 2);
+      window._v35Room.send({
+        ...v35PendingMovePacket,
+        type: 'STATE_SYNC',
+        _mid: 'rty_' + v35PendingMovePacket.ply + '_' + v35RetryCount + '_' + Date.now()
+      }, useFallback);
+
+      if (v35RetryCount < 8) {
+        v35AckRetryTimer = setTimeout(attemptRetry, 2500);
+      }
+    };
+
+    v35AckRetryTimer = setTimeout(attemptRetry, 2500);
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. CHAT, HEADERS & MATCH CONCLUSION UI
+  // -------------------------------------------------------------------------
+  function appendV35Chat(sender, text, isMine) {
+    const feed = document.getElementById('v31ChatMessages');
+    if (!feed) return;
+    const row = document.createElement('div');
+    row.className = `v31-chat-line ${isMine ? 'mine' : 'theirs'}`;
+    const n = document.createElement('span');
+    n.className = 'v31-chat-sender';
+    n.style.color = isMine ? '#81b64c' : '#32b8e6';
+    n.textContent = `${sender}:`;
+    const m = document.createElement('span');
+    m.textContent = text;
+    row.appendChild(n);
+    row.appendChild(m);
+    feed.appendChild(row);
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  function setV35ConnBadge(state) {
+    const pill = document.getElementById('v35ConnPill');
+    if (!pill) return;
+    if (state === 'live') {
+      pill.textContent = '🟢 Live';
+      pill.style.color = '#81b64c';
+    } else if (state === 'syncing') {
+      pill.textContent = '🟡 Syncing...';
+      pill.style.color = '#f7c045';
+    } else {
+      pill.textContent = '🟡 Reconnecting...';
+      pill.style.color = '#f7c045';
+    }
+  }
+
+  function updateV35OnlineHeaders() {
+    if (!window._isOnlineMatch) return;
+    const wName = window._twoPlayerNames.w || 'White';
+    const bName = window._twoPlayerNames.b || 'Black';
+    const topRate = document.getElementById('topPlayerRating');
+    const botRate = document.getElementById('bottomPlayerRating');
+    const topName = document.getElementById('topPlayerName') || (topRate ? topRate.previousElementSibling : null);
+    const botName = document.getElementById('bottomPlayerName') || (botRate ? botRate.previousElementSibling : null);
+
+    const botSide = boardFlipped ? 'b' : 'w';
+    if (botSide === 'w') {
+      if (botName) botName.textContent = `⬜ ${wName}`;
+      if (topName) topName.textContent = `⬛ ${bName}`;
+    } else {
+      if (botName) botName.textContent = `⬛ ${bName}`;
+      if (topName) topName.textContent = `⬜ ${wName}`;
+    }
+    if (!window._twoPlayerMatchEnded) {
+      if (botRate) botRate.textContent = '(Online 1v1)';
+      if (topRate) topRate.textContent = '(Online 1v1)';
+    }
+
+    const dot = document.getElementById('v23TurnDot');
+    const lbl = document.getElementById('v23TurnLabel');
+    const isW = game.turn() === 'w';
+    if (dot) dot.style.backgroundColor = isW ? '#ffffff' : '#181715';
+    if (lbl) {
+      if (window._twoPlayerMatchEnded) lbl.textContent = '🏁 Match Finished — Review Ready!';
+      else {
+        const myTurn = (game.turn() === window._onlineMyColor);
+        lbl.textContent = myTurn ? `⚡ YOUR TURN (${isW ? wName : bName})` : `⏳ Waiting for ${isW ? wName : bName}...`;
+      }
+    }
+
+    const undoBtn = document.getElementById('takebackBtn');
+    if (undoBtn && !window._twoPlayerMatchEnded) undoBtn.classList.add('v24-undo-locked');
+    renderV35Clocks();
+  }
+
+  function finishV35OnlineMatch(reasonText, winnerSide) {
+    if (window._twoPlayerMatchEnded) return;
+    window._twoPlayerMatchEnded = true;
+    stopV35OnlineClock();
+    if (v35AckRetryTimer) { clearTimeout(v35AckRetryTimer); v35AckRetryTimer = null; }
+    v35PendingMovePacket = null;
+
+    document.getElementById('v35OnlineBtnsRow')?.classList.add('hidden');
+    document.getElementById('v26IncomingDrawBox')?.classList.add('hidden');
+    document.getElementById('v35OpenPostReviewBtn')?.classList.remove('hidden');
+
+    window._isFairPlayMatchLive = false;
+    document.body.classList.remove('fair-play-match-live', 'two-player-blind-live');
+
+    const wName = window._twoPlayerNames.w || 'White';
+    const bName = window._twoPlayerNames.b || 'Black';
+
+    let finalWin = winnerSide;
+    if (!finalWin && game.in_checkmate()) finalWin = (game.turn() === 'b') ? 'w' : 'b';
+    else if (!finalWin && (game.in_draw() || game.in_stalemate() || game.in_threefold_repetition())) finalWin = 'draw';
+
+    const emptyC = () => ({ brilliant: 0, great: 0, best: 0, book: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 });
+    const wc = emptyC(), bc = emptyC();
+    let wSum = 0, wN = 0, bSum = 0, bN = 0;
+
+    timeline.forEach((st, i) => {
+      const mv = st.moveObj; if (!mv) return;
+      if (i <= 3 && customStartFen === STD_FEN) {
+        st.classification = CLASSIFICATIONS.book;
+        st.cpLoss = 0;
+      } else if (!st.classification || st.classification.key === 'hidden') {
+        st.classification = CLASSIFICATIONS.good;
+      }
+      const k = st.classification.key;
+      const cObj = mv.color === 'w' ? wc : bc;
+      if (cObj[k] !== undefined) cObj[k]++;
+      const loss = Math.max(0, Math.min(600, st.cpLoss || 0));
+      let acc = 100 * Math.exp(-0.0042 * loss);
+      if (['brilliant', 'great', 'best', 'book'].includes(k)) acc = Math.max(acc, 97);
+      if (mv.color === 'w') { wSum += acc; wN++; } else { bSum += acc; bN++; }
+    });
+
+    const wAcc = wN > 0 ? Math.round(wSum / wN) : 85;
+    const bAcc = bN > 0 ? Math.round(bSum / bN) : 85;
+    const calcE = (acc, c, n) => {
+      if (n === 0) return 400;
+      let e = 150 + Math.pow(acc / 100, 2.2) * 2300 + c.brilliant * 95 + c.great * 45 - c.blunder * 70 - c.mistake * 28;
+      if (n < 4) e = Math.min(e, 1450);
+      return Math.max(150, Math.min(2750, Math.round(e / 10) * 10));
+    };
+    const wElo = calcE(wAcc, wc, wN), bElo = calcE(bAcc, bc, bN);
+
+    const headline = finalWin === 'w' ? `🏆 ${wName} (White) Wins!`
+      : (finalWin === 'b' ? `🏆 ${bName} (Black) Wins!` : '🤝 Match Drawn!');
+
+    if (Array.isArray(window._matchHistoryV26) && timeline.length > 0) {
+      window._matchHistoryV26.unshift({
+        id: 'gm_' + Date.now(),
+        dateStr: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
+        modeType: 'online',
+        modeLabel: '🌐 Online 1v1',
+        whiteName: wName,
+        blackName: bName,
+        resultText: `${headline} (${reasonText || 'Finished'})`,
+        resultColor: finalWin === 'w' ? '#81b64c' : (finalWin === 'b' ? '#32b8e6' : '#f7c045'),
+        customStartFen: STD_FEN,
+        movesSan: timeline.map(t => t.san),
+        wElo, bElo, wAcc, bAcc
+      });
+      window._matchHistoryV26 = window._matchHistoryV26.slice(0, 10);
+      if (typeof window.saveAndRenderProfile === 'function') window.saveAndRenderProfile(0);
+    }
+
+    document.getElementById('v23ResHeadline').textContent = headline;
+    document.getElementById('v23ResSubline').textContent = reasonText || 'Match Complete';
+    document.getElementById('v23ResWName').textContent = `⬜ ${wName}`;
+    document.getElementById('v23ResWElo').textContent = `⚡ ${wElo} ELO`;
+    document.getElementById('v23ResWAcc').textContent = `${wAcc}%`;
+    document.getElementById('v23ResWCounts').innerHTML = `💎 ${wc.brilliant} Brilliant • 📖 ${wc.book} Book`;
+    document.getElementById('v23ResBName').textContent = `⬛ ${bName}`;
+    document.getElementById('v23ResBElo').textContent = `⚡ ${bElo} ELO`;
+    document.getElementById('v23ResBAcc').textContent = `${bAcc}%`;
+    document.getElementById('v23ResBCounts').innerHTML = `💎 ${bc.brilliant} Brilliant • 📖 ${bc.book} Book`;
+
+    updateV35OnlineHeaders();
+    window.renderBoard();
+    window.updateCoachAndMoveListUI();
+    if (typeof window.updateGameReviewTabUI === 'function') window.updateGameReviewTabUI();
+    try { playChessSound('levelup'); } catch (e) {}
+    document.getElementById('v23TwoPlayerResultModal')?.classList.remove('hidden');
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. LAUNCH ONLINE 1v1 MATCH WITH SELF-HEALING CHANNEL & LIVE CHAT
+  // -------------------------------------------------------------------------
+  function launchV35OnlineMatch(roomCode, existingCh, myColor, whiteName, blackName, syncedRules) {
+    // Clean up lobby / ping timers without closing existingCh
+    v35Timers.forEach(t => t.isInterval ? clearInterval(t.id) : clearTimeout(t.id));
+    v35Timers = [];
+    if (window._v35Lobby) { window._v35Lobby.close(); window._v35Lobby = null; }
+    killAllLegacyOnline();
+
+    window._onlineMyColor = myColor;
+    window._isOnlineMatch = true;
+    window._isTwoPlayerLocalMode = true;
+    window._twoPlayerMatchEnded = false;
+    window._currentMatchRecordedId = null;
+    window._twoPlayerNames = { w: whiteName || 'White', b: blackName || 'Black' };
+    window._twoPlayerAutoFlip = false;
+    if (syncedRules && window._matchRules) Object.assign(window._matchRules, syncedRules);
+
+    const roomCh = existingCh || new V35HybridChannel(`room_${roomCode}`, null, {
+      since: '15s',
+      willPayload: { type: 'RESIGN_ABANDON', loserSide: myColor, msg: '🚩 Opponent disconnected!' },
+      onStatus: setV35ConnBadge
+    });
+    roomCh.onStatus = setV35ConnBadge;
+    window._v35Room = roomCh;
+
+    document.getElementById('v24RoomCodeDisplayBox')?.classList.add('hidden');
+    document.getElementById('v24QuickMatchStatus')?.classList.add('hidden');
+    document.getElementById('v24OnlineErrorMsg')?.classList.add('hidden');
+
+    customStartFen = STD_FEN;
+    window._savedCoachMatchFen = STD_FEN;
+    game.reset();
+    timeline = [];
+    viewPlyIndex = -1;
+    playerColor = myColor;
+    boardFlipped = (myColor === 'b');
+    isLessonMode = false;
+    isEditorMode = false;
+    isPlacementMatch = false;
+    window._isCoachMatchRunning = true;
+    isGameActive = true;
+    selectedSq = null; legalMovesFromSelected = [];
+    window.activeHintMove = null; window.lessonClueSq = null; window.lessonRefutationArrow = null;
+    lastLandedSquare = null;
+
+    window._isFairPlayMatchLive = true;
+    document.body.classList.add('fair-play-match-live', 'two-player-blind-live');
+    document.body.classList.remove('coach-challenging-live');
+
+    const setupV = document.getElementById('setupSidebarView');
+    const liveP = document.getElementById('liveCoachMatchPanel');
+    const botB = document.getElementById('takebackBtn')?.parentElement?.parentElement;
+    if (setupV) { setupV.classList.add('hidden'); setupV.classList.remove('flex'); setupV.style.display = 'none'; }
+    if (liveP) { liveP.classList.remove('hidden'); liveP.classList.add('flex'); liveP.style.display = 'flex'; }
+    if (botB) { botB.classList.remove('hidden'); botB.style.display = ''; }
+
+    document.getElementById('tabContentCoach')?.classList.remove('hidden');
+    document.getElementById('tabContentLessons')?.classList.add('hidden');
+    document.getElementById('tabContentReview')?.classList.add('hidden');
+    document.getElementById('tabContentEditor')?.classList.add('hidden');
+    document.getElementById('tabContentHistory')?.classList.add('hidden');
+
+    // Build Live Online Action Bar (Status + 🔄 Sync + 🤝 Offer Draw + Red 🚩 Resign)
+    const liveBar = document.getElementById('v23LiveTwoPlayerBar');
+    if (liveBar) {
+      liveBar.classList.remove('hidden');
+      liveBar.innerHTML = `
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span id="v23TurnDot" class="w-4 h-4 rounded-full border-2 border-[#32b8e6] bg-white flex-shrink-0"></span>
+            <span id="v23TurnLabel" class="text-xs font-bold text-white truncate"></span>
+          </div>
+          <div class="flex items-center gap-1.5 flex-shrink-0">
+            <span id="v35ConnPill" class="text-[10px] font-bold text-[#81b64c]">🟢 Live</span>
+            <button id="v35ManualSyncBtn" type="button" title="Force resync board with opponent" class="px-2 py-0.5 rounded bg-[#2b2926] hover:bg-[#3a3834] text-[#d6d4d0] text-[10px] font-bold border border-white/10">🔄 Sync</button>
+          </div>
+        </div>
+        <div id="v26IncomingDrawBox" class="hidden p-2 rounded-xl bg-[#1e2d3d] border-2 border-[#3b82f6] space-y-1.5">
+          <div id="v26IncomingDrawText" class="text-[11px] font-bold text-white text-center">🤝 Opponent offered a Draw!</div>
+          <div class="grid grid-cols-2 gap-1.5">
+            <button id="v35AccDrawBtn" class="py-1.5 rounded-lg bg-[#81b64c] text-white font-bold text-[11px]">✅ Accept</button>
+            <button id="v35DecDrawBtn" class="py-1.5 rounded-lg bg-[#ca3431] text-white font-bold text-[11px]">❌ Decline</button>
+          </div>
+        </div>
+        <div id="v35OnlineBtnsRow" class="grid grid-cols-2 gap-1.5">
+          <button id="v35OfferDrawBtn" class="v26-btn-draw">🤝 Offer Draw</button>
+          <button id="v35ResignBtn" class="v26-btn-resign">🚩 Resign</button>
+        </div>
+        <button id="v35OpenPostReviewBtn" class="hidden w-full py-2 rounded-xl bg-[#81b64c] text-white font-bold text-xs shadow">
+          📊 Open Post-Game Review &amp; Video ▶
+        </button>
+      `;
+
+      // 🔄 Manual Sync button (heals any sleep/network hiccup in 1 click!)
+      document.getElementById('v35ManualSyncBtn').addEventListener('click', () => {
+        setV35ConnBadge('syncing');
+        viewPlyIndex = timeline.length - 1;
+        isGameActive = true;
+        roomCh.send({
+          type: 'SYNC_REQ',
+          ply: timeline.length,
+          movesSan: timeline.map(t => t.san),
+          wMs: v35Clock.wMs,
+          bMs: v35Clock.bMs
+        }, true);
+        window.renderBoard();
+      });
+
+      // Red 2-Tap Resign
+      let resignArmed = false, resignT = null;
+      const rBtn = document.getElementById('v35ResignBtn');
+      rBtn.addEventListener('click', () => {
+        if (window._twoPlayerMatchEnded) return;
+        if (!resignArmed) {
+          resignArmed = true;
+          rBtn.classList.add('confirming');
+          rBtn.textContent = '⚠️ Tap to Confirm';
+          if (resignT) clearTimeout(resignT);
+          resignT = setTimeout(() => {
+            resignArmed = false;
+            rBtn.classList.remove('confirming');
+            rBtn.textContent = '🚩 Resign';
+          }, 3500);
+          return;
+        }
+        resignArmed = false;
+        const myName = myColor === 'w' ? window._twoPlayerNames.w : window._twoPlayerNames.b;
+        const msg = `🚩 ${myName} Resigned!`;
+        roomCh.send({ type: 'RESIGN', loserSide: myColor, msg }, true);
+        finishV35OnlineMatch(msg, myColor === 'w' ? 'b' : 'w');
+      });
+
+      // Offer / Accept / Decline Draw
+      const dBtn = document.getElementById('v35OfferDrawBtn');
+      dBtn.addEventListener('click', () => {
+        if (window._twoPlayerMatchEnded) return;
+        const myName = myColor === 'w' ? window._twoPlayerNames.w : window._twoPlayerNames.b;
+        roomCh.send({ type: 'DRAW_OFFER', fromSide: myColor, fromName: myName });
+        dBtn.disabled = true;
+        dBtn.textContent = '⏳ Sent';
+      });
+      document.getElementById('v35AccDrawBtn').addEventListener('click', () => {
+        document.getElementById('v26IncomingDrawBox')?.classList.add('hidden');
+        roomCh.send({ type: 'DRAW_ACCEPT' }, true);
+        finishV35OnlineMatch('🤝 Draw Agreed by Both Players!', 'draw');
+      });
+      document.getElementById('v35DecDrawBtn').addEventListener('click', () => {
+        document.getElementById('v26IncomingDrawBox')?.classList.add('hidden');
+        roomCh.send({ type: 'DRAW_DECLINE' });
+      });
+      document.getElementById('v35OpenPostReviewBtn').addEventListener('click', () => {
+        window.activateSidebarTab('review');
+      });
+    }
+
+    // Re-wire Live Unfiltered Chat box to send over V35HybridChannel!
+    const chatBox = document.getElementById('v31OnlineChatBox');
+    if (chatBox) {
+      chatBox.classList.remove('hidden');
+      const feed = document.getElementById('v31ChatMessages');
+      if (feed) feed.innerHTML = '';
+      const tag = document.getElementById('v31ChatRoomTag');
+      if (tag) tag.textContent = `Room ${roomCode}`;
+
+      const oldSend = document.getElementById('v31ChatSendBtn');
+      const oldInp = document.getElementById('v31ChatInput');
+      if (oldSend && oldSend.parentNode && oldInp && oldInp.parentNode) {
+        const freshSend = oldSend.cloneNode(true);
+        const freshInp = oldInp.cloneNode(true);
+        oldSend.parentNode.replaceChild(freshSend, oldSend);
+        oldInp.parentNode.replaceChild(freshInp, oldInp);
+
+        const doSendChat = () => {
+          const txt = freshInp.value.trim();
+          if (!txt) return;
+          freshInp.value = '';
+          const myName = (myColor === 'w' ? window._twoPlayerNames.w : window._twoPlayerNames.b) || userProfile.playerName || 'You';
+          appendV35Chat(myName, txt, true);
+          if (window._v35Room) {
+            window._v35Room.send({ type: 'CHAT', senderName: myName, text: txt });
+          }
+        };
+        freshSend.addEventListener('click', doSendChat);
+        freshInp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); doSendChat(); } });
+      }
+      appendV35Chat('System', `Connected! ${whiteName} (White) vs ${blackName} (Black).`, false);
+    }
+
+    // Handle all incoming packets on roomCh
+    roomCh.onMsg = (data) => {
+      if (!data) return;
+      setV35ConnBadge('live');
+
+      if (data.type === 'CHAT' && typeof data.text === 'string') {
+        appendV35Chat(data.senderName || 'Opponent', data.text, false);
+        try { playChessSound('move'); } catch (e) {}
+        return;
+      }
+
+      if (data.type === 'ACK') {
+        if (v35PendingMovePacket && Number(data.ply) >= v35PendingMovePacket.ply) {
+          if (v35AckRetryTimer) { clearTimeout(v35AckRetryTimer); v35AckRetryTimer = null; }
+          v35PendingMovePacket = null;
+        }
+        return;
+      }
+
+      if (data.type === 'SYNC_REQ') {
+        // Apply if requester is ahead, otherwise send them our full state!
+        if (Array.isArray(data.movesSan) && data.movesSan.length > timeline.length) {
+          applyIncomingMoveOrSyncV35({ ...data, type: 'STATE_SYNC' });
+        } else {
+          roomCh.send({
+            type: 'STATE_SYNC',
+            ply: timeline.length,
+            movesSan: timeline.map(t => t.san),
+            wMs: v35Clock.wMs,
+            bMs: v35Clock.bMs
+          }, true);
+        }
+        return;
+      }
+
+      if (data.type === 'MOVE' || data.type === 'STATE_SYNC') {
+        applyIncomingMoveOrSyncV35(data);
+        return;
+      }
+
+      if (window._twoPlayerMatchEnded) return;
+
+      if (data.type === 'DRAW_OFFER') {
+        const box = document.getElementById('v26IncomingDrawBox');
+        const lbl = document.getElementById('v26IncomingDrawText');
+        if (lbl) lbl.textContent = `🤝 ${data.fromName || 'Opponent'} offered a Draw!`;
+        if (box) box.classList.remove('hidden');
+        try { playChessSound('check'); } catch (e) {}
+      } else if (data.type === 'DRAW_ACCEPT') {
+        finishV35OnlineMatch('🤝 Draw Agreed by Both Players!', 'draw');
+      } else if (data.type === 'DRAW_DECLINE') {
+        const dBtn = document.getElementById('v35OfferDrawBtn');
+        if (dBtn) { dBtn.disabled = false; dBtn.textContent = '🤝 Offer Draw'; }
+        appendV35Chat('System', 'Opponent declined your draw offer.', false);
+      } else if (data.type === 'RESIGN' || data.type === 'RESIGN_ABANDON' || data.type === 'TIMEOUT') {
+        const winSide = data.loserSide === 'w' ? 'b' : 'w';
+        const rsn = data.type === 'RESIGN_ABANDON'
+          ? '🚩 Opponent left or reloaded (Automatic Resignation)!'
+          : (data.msg || '🚩 Opponent Resigned!');
+        finishV35OnlineMatch(rsn, winSide);
+      }
+    };
+
+    updateV35OnlineHeaders();
+    startV35OnlineClock();
+    window.renderBoard();
+    window.updateCoachAndMoveListUI();
+    try { playChessSound('levelup'); } catch (e) {}
+  }
+
+  // -------------------------------------------------------------------------
+  // 6. TURN-UNLOCK GUARD + MOVE COMMIT INTERCEPTOR + TAB VISIBILITY AUTO-SYNC
+  // -------------------------------------------------------------------------
+  // Always snap back to live ply & keep your own turn unlocked when clicking the board!
+  window.addEventListener('pointerdown', (e) => {
+    if (!window._isOnlineMatch || window._twoPlayerMatchEnded || isLessonMode || isEditorMode) return;
+    if (!boardEl || !boardEl.contains(e.target)) return;
+
+    if (game.turn() === window._onlineMyColor) {
+      isGameActive = true;
+      if (viewPlyIndex !== timeline.length - 1) {
+        viewPlyIndex = timeline.length - 1;
+        window.renderBoard();
+      }
+    }
+  }, true);
+
+  // Auto-sync when returning to tab or waking laptop from sleep!
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && window._isOnlineMatch && !window._twoPlayerMatchEnded && window._v35Room) {
+      window._v35Room.send({
+        type: 'SYNC_REQ',
+        ply: timeline.length,
+        movesSan: timeline.map(t => t.san),
+        wMs: v35Clock.wMs,
+        bMs: v35Clock.bMs
+      });
+    }
+  });
+
+  // Intercept move commits in Online 1v1 FIRST (cleanly bypasses old V31/V24 online handlers!)
+  const prevCommitV35 = window.commitMoveOnBoardInstant;
+  window.commitMoveOnBoardInstant = function(moveObj) {
+    if (!isLessonMode && !isEditorMode && window._isOnlineMatch && window._v35Room) {
+      if (window._twoPlayerMatchEnded || game.turn() !== window._onlineMyColor) return;
+
+      const fenBefore = game.fen();
+      const exec = game.move(moveObj);
+      if (!exec) return;
+
+      timeline.push({
+        fenBefore,
+        fenAfter: game.fen(),
+        moveObj: exec,
+        san: exec.san,
+        evalBeforeWhiteCp: 0,
+        evalAfterWhiteCp: 0,
+        bestMoveBefore: null,
+        bestPvBefore: [],
+        oppBestReply: null,
+        cpLoss: 0,
+        classification: { key: 'hidden', label: '', symbol: '', color: '#55534f' },
+        coachComment: '',
+        openingName: '',
+        multiPv: [],
+        _deepAnalyzedV21: true
+      });
+      viewPlyIndex = timeline.length - 1;
+      lastLandedSquare = exec.to;
+      selectedSq = null;
+      legalMovesFromSelected = [];
+      window.activeHintMove = null;
+      window.lessonClueSq = null;
+      window.lessonRefutationArrow = null;
+      window._savedCoachMatchFen = game.fen();
+
+      tickV35ClockOnMove(exec.color);
+      try {
+        playChessSound(game.game_over() ? 'gameover' : (game.in_check() ? 'check' : (exec.captured ? 'capture' : 'move')));
+      } catch (e) {}
+
+      const movePacket = {
+        type: 'MOVE',
+        ply: timeline.length,
+        from: exec.from,
+        to: exec.to,
+        promotion: exec.promotion || undefined,
+        san: exec.san,
+        movesSan: timeline.map(t => t.san),
+        wMs: v35Clock.wMs,
+        bMs: v35Clock.bMs
+      };
+
+      window._v35Room.send(movePacket);
+      scheduleMoveAckRetryV35(movePacket);
+
+      updateV35OnlineHeaders();
+      window.renderBoard();
+      window.updateCoachAndMoveListUI();
+
+      if (game.game_over()) {
+        finishV35OnlineMatch(null, null);
+      }
+      return;
+    }
+    prevCommitV35(moveObj);
+  };
+
+  // Automatic resignation if player closes or reloads tab during an active Online 1v1 match
+  function sendV35AbandonOnUnload() {
+    if (window._isOnlineMatch && !window._twoPlayerMatchEnded && window._v35Room) {
+      window._v35Room.sendBeacon({
+        type: 'RESIGN_ABANDON',
+        loserSide: window._onlineMyColor,
+        msg: '🚩 Opponent left or reloaded the page!'
+      });
+    }
+  }
+  window.addEventListener('beforeunload', sendV35AbandonOnUnload);
+  window.addEventListener('pagehide', sendV35AbandonOnUnload);
+
+  // -------------------------------------------------------------------------
+  // 7. RE-WIRE ONLINE LOBBY BUTTONS (CREATE ROOM, JOIN ROOM & QUICK MATCH)
+  // -------------------------------------------------------------------------
+  function rebindCleanV35(id, fn) {
+    const el = document.getElementById(id);
+    if (!el || !el.parentNode) return;
+    const f = el.cloneNode(true);
+    el.parentNode.replaceChild(f, el);
+    f.addEventListener('click', fn);
+  }
+
+  // A. CREATE PRIVATE 6-LETTER ROOM CODE
+  rebindCleanV35('v24CreateRoomBtn', () => {
+    clearAllV35Online();
+    const errEl = document.getElementById('v24OnlineErrorMsg');
+    const codeBox = document.getElementById('v24RoomCodeDisplayBox');
+    const codeTxt = document.getElementById('v24RoomCodeText');
+    const waitTxt = document.getElementById('v24RoomWaitText');
+    if (errEl) errEl.classList.add('hidden');
+
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    const hostName = (userProfile.playerName || 'Host').trim();
+
+    if (codeTxt) codeTxt.textContent = code;
+    if (waitTxt) waitTxt.textContent = `⏳ Room ${code} Ready! Waiting for friend...`;
+    if (codeBox) codeBox.classList.remove('hidden');
+
+    let started = false;
+    const ch = new V35HybridChannel(`room_${code}`, (msg) => {
+      if (started || !msg) return;
+      if (msg.type === 'GUEST_JOIN') {
+        started = true;
+        const guestName = msg.guestName || 'Friend';
+        ch.send({
+          type: 'MATCH_START',
+          whiteName: hostName,
+          blackName: guestName,
+          rules: window._matchRules
+        }, true);
+        launchV35OnlineMatch(code, ch, 'w', hostName, guestName, window._matchRules);
+      }
+    }, {
+      since: '60s',
+      willPayload: { type: 'RESIGN_ABANDON', loserSide: 'w', msg: '🚩 Opponent disconnected!' }
+    });
+    window._v35Room = ch;
+
+    addV35Timer(setTimeout(() => { if (!started) ch.send({ type: 'HOST_READY', hostName }, true); }, 350));
+    addV35Timer(setInterval(() => { if (!started) ch.send({ type: 'HOST_READY', hostName }); }, 4000), true);
+  });
+
+  rebindCleanV35('v24CancelRoomBtn', () => {
+    clearAllV35Online();
+    document.getElementById('v24RoomCodeDisplayBox')?.classList.add('hidden');
+  });
+
+  // B. JOIN PRIVATE 6-LETTER ROOM CODE
+  rebindCleanV35('v24JoinRoomBtn', () => {
+    const code = (document.getElementById('v24JoinCodeInput')?.value || '').trim().toUpperCase();
+    const errEl = document.getElementById('v24OnlineErrorMsg');
+    if (code.length < 4) {
+      if (errEl) { errEl.style.color = '#f26b68'; errEl.textContent = 'Enter a valid 6-character Room Code!'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    clearAllV35Online();
+    if (errEl) { errEl.style.color = '#32b8e6'; errEl.textContent = `🔌 Joining Room ${code}...`; errEl.classList.remove('hidden'); }
+
+    const guestName = (userProfile.playerName || 'Friend').trim();
+    let started = false;
+    const ch = new V35HybridChannel(`room_${code}`, (msg) => {
+      if (started || !msg) return;
+      if (msg.type === 'MATCH_START') {
+        started = true;
+        launchV35OnlineMatch(code, ch, 'b', msg.whiteName, msg.blackName, msg.rules);
+      } else if (msg.type === 'HOST_READY') {
+        ch.send({ type: 'GUEST_JOIN', guestName }, true);
+      }
+    }, {
+      since: '60s',
+      willPayload: { type: 'RESIGN_ABANDON', loserSide: 'b', msg: '🚩 Opponent disconnected!' }
+    });
+    window._v35Room = ch;
+
+    addV35Timer(setTimeout(() => { if (!started) ch.send({ type: 'GUEST_JOIN', guestName }, true); }, 400));
+    addV35Timer(setInterval(() => { if (!started) ch.send({ type: 'GUEST_JOIN', guestName }); }, 3000), true);
+
+    addV35Timer(setTimeout(() => {
+      if (!started && errEl) {
+        errEl.style.color = '#f26b68';
+        errEl.textContent = `Still waiting for Room "${code}"... make sure the host generated this code.`;
+      }
+    }, 9000));
+  });
+
+  // C. GLOBAL QUICK MATCHMAKING
+  rebindCleanV35('v24QuickMatchBtn', () => {
+    clearAllV35Online();
+    const statusEl = document.getElementById('v24QuickMatchStatus');
+    const errEl = document.getElementById('v24OnlineErrorMsg');
+    if (errEl) errEl.classList.add('hidden');
+    if (statusEl) {
+      statusEl.classList.remove('hidden');
+      statusEl.style.color = '#f7c045';
+      statusEl.textContent = '🔎 Searching for an online opponent...';
+    }
+
+    const myName = (userProfile.playerName || 'Player').trim();
+    let matched = false;
+
+    const lobby = new V35HybridChannel('global_qm_lobby_v35', (msg) => {
+      if (matched || !msg) return;
+      if (msg.type === 'QM_SEEK' && msg._sid && (Date.now() - (msg._ts || 0) < 25000)) {
+        if (MY_ID < msg._sid) {
+          matched = true;
+          const roomCode = 'QM' + Math.random().toString(36).slice(2, 6).toUpperCase();
+          const roomCh = new V35HybridChannel(`room_${roomCode}`, null, {
+            since: '5s',
+            willPayload: { type: 'RESIGN_ABANDON', loserSide: 'w', msg: '🚩 Opponent disconnected!' }
+          });
+          lobby.send({
+            type: 'QM_PAIR',
+            targetId: msg._sid,
+            roomCode,
+            whiteName: myName,
+            blackName: msg.name || 'Opponent',
+            rules: window._matchRules
+          }, true);
+          setTimeout(() => {
+            launchV35OnlineMatch(roomCode, roomCh, 'w', myName, msg.name || 'Opponent', window._matchRules);
+          }, 250);
+        } else {
+          lobby.send({ type: 'QM_SEEK', name: myName });
+        }
+      }
+
+      if (msg.type === 'QM_PAIR' && msg.targetId === MY_ID && msg.roomCode) {
+        matched = true;
+        const roomCh = new V35HybridChannel(`room_${msg.roomCode}`, null, {
+          since: '15s',
+          willPayload: { type: 'RESIGN_ABANDON', loserSide: 'b', msg: '🚩 Opponent disconnected!' }
+        });
+        launchV35OnlineMatch(msg.roomCode, roomCh, 'b', msg.whiteName, msg.blackName, msg.rules);
+      }
+    }, { since: '25s' });
+    window._v35Lobby = lobby;
+
+    addV35Timer(setTimeout(() => { if (!matched) lobby.send({ type: 'QM_SEEK', name: myName }, true); }, 400));
+    addV35Timer(setInterval(() => { if (!matched) lobby.send({ type: 'QM_SEEK', name: myName }); }, 3500), true);
+    addV35Timer(setTimeout(() => {
+      if (!matched && statusEl) {
+        statusEl.style.color = '#f26b68';
+        statusEl.innerHTML = `No people looking for a match right now.<br><span class="text-[10px] text-[#b5b3b0]">Still searching in the background, or use a Private Room Code below.</span>`;
+      }
+    }, 7000));
+  });
+
+  // Clean up V35 channels when switching back to Coach / Lobby
+  const prevStartCoachV35 = window.startNewStandardCoachMatch;
+  window.startNewStandardCoachMatch = function() {
+    clearAllV35Online();
+    document.getElementById('v31OnlineChatBox')?.classList.add('hidden');
+    if (prevStartCoachV35) prevStartCoachV35();
+  };
+
+  ['newGameSetupBtn', 'railSettingsBtn', 'navRailHomeLogo'].forEach(id => {
+    document.getElementById(id)?.addEventListener('click', () => {
+      if (window._isOnlineMatch && !window._twoPlayerMatchEnded) return;
+      clearAllV35Online();
+      document.getElementById('v31OnlineChatBox')?.classList.add('hidden');
+    });
+  });
+
+  // Preload MQTT library quietly in the background so creating/joining rooms is instant!
+  setTimeout(ensureMqttLoadedV35, 800);
+})();
+</script>
 </html>
