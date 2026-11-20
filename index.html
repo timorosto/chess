@@ -51458,4 +51458,1458 @@
   }
 })();
 </script>
+<!-- ===================================================================== -->
+<!-- 🎯 V46 UNIFIED STOCKFISH TRUTH ENGINE (ACCURATE BRILLIANTS + REAL     -->
+<!--    ONLINE 1v1 POST-GAME STOCKFISH REVIEW + FIXED 'B' HOTKEY)          -->
+<!--    1. Real legal-move SEE sacrifice math (zero fake trades/handouts)  -->
+<!--    2. Shared by BOTH 'B' hotkey & Game Review (100% agreement!)       -->
+<!--    3. Automatic Stockfish MultiPV-2 analysis for Online 1v1 matches   -->
+<!--    4. Silences fake live Brilliant sound/popups during Online 1v1     -->
+<!--    Zero edits to V42's Online 1v1 MQTT/HTTPS networking!              -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyUnifiedStockfishTruthV46() {
+  const STD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const FILES = 'abcdefgh';
+  const PVAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+  const PNAME = { p: 'Pawn', n: 'Knight', b: 'Bishop', r: 'Rook', q: 'Queen', k: 'King' };
+  const SECRET_PASS = 'chessmog';
+
+  // -------------------------------------------------------------------------
+  // 1. SILENCE FAKE LIVE BRILLIANT EFFECTS DURING ACTIVE ONLINE 1v1 MATCHES
+  // -------------------------------------------------------------------------
+  const cssV46 = document.createElement('style');
+  cssV46.textContent = `
+    body.two-player-blind-live #brilliantAlertBanner,
+    body.two-player-blind-live .brilliant-live-toast,
+    body.fair-play-match-live #brilliantAlertBanner {
+      display: none !important;
+    }
+    #v46OnlineReviewProgress {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: linear-gradient(90deg, #1b2a1e 0%, #1b1a17 100%);
+      border: 1.5px solid rgba(129, 182, 76, 0.55);
+      margin-bottom: 10px;
+      font-size: 11.5px;
+      color: #e8e6e2;
+    }
+    #v46OnlineReviewProgress.hidden { display: none !important; }
+    #v46ProgTrack {
+      width: 100%;
+      height: 6px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.1);
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    #v46ProgFill {
+      height: 100%;
+      width: 0%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #81b64c, #24d1c6);
+      transition: width 120ms linear;
+    }
+  `;
+  document.head.appendChild(cssV46);
+
+  if (typeof window.playChessSound === 'function') {
+    const origPlaySoundV46 = window.playChessSound;
+    window.playChessSound = function(type) {
+      if (type === 'brilliant' && window._isOnlineMatch && !window._twoPlayerMatchEnded) {
+        return origPlaySoundV46.call(this, 'move');
+      }
+      return origPlaySoundV46.apply(this, arguments);
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 2. SHARED STOCKFISH WORKER LOADER (WITH CDN FALLBACK)
+  // -------------------------------------------------------------------------
+  function createStockfishWorkerV46(multiPv = 2, contempt = 24) {
+    return new Promise((resolve) => {
+      const cdns = [
+        'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js',
+        'https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js'
+      ];
+      let idx = 0;
+
+      const tryBoot = () => {
+        if (idx >= cdns.length) { resolve(null); return; }
+        const url = cdns[idx++];
+        try {
+          const blob = new Blob([`importScripts('${url}');`], { type: 'application/javascript' });
+          const w = new Worker(URL.createObjectURL(blob));
+          let ready = false;
+          const bootTimeout = setTimeout(() => {
+            if (!ready) {
+              try { w.terminate(); } catch (e) {}
+              tryBoot();
+            }
+          }, 3500);
+
+          w.onerror = () => {
+            clearTimeout(bootTimeout);
+            try { w.terminate(); } catch (e) {}
+            tryBoot();
+          };
+
+          w.onmessage = (ev) => {
+            const line = typeof ev.data === 'string' ? ev.data : '';
+            if (line === 'uciok') {
+              w.postMessage(`setoption name MultiPV value ${multiPv}`);
+              w.postMessage('setoption name Skill Level value 20');
+              w.postMessage('setoption name Hash value 48');
+              w.postMessage(`setoption name Contempt value ${contempt}`);
+              w.postMessage('isready');
+            } else if (line === 'readyok' && !ready) {
+              ready = true;
+              clearTimeout(bootTimeout);
+              resolve(w);
+            }
+          };
+          w.postMessage('uci');
+        } catch (e) {
+          tryBoot();
+        }
+      };
+      tryBoot();
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. CHESS HELPERS & EXACT LEGAL-MOVE SEE (STATIC EXCHANGE EVALUATION)
+  // -------------------------------------------------------------------------
+  function fenKey4(fen) {
+    return (fen || '').split(' ').slice(0, 4).join(' ');
+  }
+
+  function normUciV46(chess, uci) {
+    if (!uci || uci.length < 4) return null;
+    let from = uci.slice(0, 2), to = uci.slice(2, 4);
+    const promo = uci.length >= 5 ? uci[4].toLowerCase() : undefined;
+    const p = chess.get(from);
+    if (p && p.type === 'k') {
+      if (from === 'e1' && to === 'h1') to = 'g1';
+      else if (from === 'e1' && to === 'a1') to = 'c1';
+      else if (from === 'e8' && to === 'h8') to = 'g8';
+      else if (from === 'e8' && to === 'a8') to = 'c8';
+    }
+    return { from, to, promotion: promo };
+  }
+
+  function resolveMoveV46(fen, uci) {
+    try {
+      const sim = new Chess(fen);
+      const sp = normUciV46(sim, uci);
+      if (!sp) return null;
+      const mv = sim.move({ from: sp.from, to: sp.to, promotion: sp.promotion || 'q' });
+      if (!mv) return null;
+      return { mv, fenAfter: sim.fen() };
+    } catch (e) { return null; }
+  }
+
+  function expandPvV46(fen, tokens, maxPlies = 5) {
+    const out = [];
+    try {
+      const sim = new Chess(fen);
+      for (let i = 0; i < tokens.length && out.length < maxPlies; i++) {
+        const tok = tokens[i];
+        if (!tok) break;
+        let mv = null;
+        if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(tok)) {
+          const sp = normUciV46(sim, tok);
+          if (sp) mv = sim.move({ from: sp.from, to: sp.to, promotion: sp.promotion || 'q' });
+        }
+        if (!mv) mv = sim.move(tok);
+        if (!mv) break;
+        out.push({ from: mv.from, to: mv.to, san: mv.san, uci: mv.from + mv.to + (mv.promotion || ''), fenAfter: sim.fen() });
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  // Exact legal-move SEE on `targetSq` starting from `fenAfter` (where opponent is to move!)
+  // Returns { oppNetGain, firstCapture, fenAfterAccept } — guaranteed legal, zero dummy-pawn bugs!
+  function computeExactSeeOnSquareV46(fenAfter, targetSq) {
+    try {
+      const sim = new Chess(fenAfter);
+      const firstCaps = sim.moves({ verbose: true })
+        .filter(m => m.to === targetSq && m.captured)
+        .sort((a, b) => (PVAL[a.piece] || 100) - (PVAL[b.piece] || 100));
+      if (!firstCaps.length) return { oppNetGain: 0, firstCapture: null, fenAfterAccept: null };
+
+      const firstCapture = firstCaps[0];
+      const gains = [PVAL[firstCapture.captured] || 100];
+      sim.move(firstCapture);
+      const fenAfterAccept = sim.fen();
+
+      for (let step = 0; step < 10; step++) {
+        const nextCaps = sim.moves({ verbose: true })
+          .filter(m => m.to === targetSq && m.captured)
+          .sort((a, b) => (PVAL[a.piece] || 100) - (PVAL[b.piece] || 100));
+        if (!nextCaps.length) break;
+        const nc = nextCaps[0];
+        gains.push(PVAL[nc.captured] || 100);
+        sim.move(nc);
+      }
+
+      // Standard Negamax SEE backward fold (stop-when-worse)
+      const scores = new Array(gains.length);
+      scores[gains.length - 1] = gains[gains.length - 1];
+      for (let i = gains.length - 2; i >= 0; i--) {
+        scores[i] = gains[i] - Math.max(0, scores[i + 1]);
+      }
+
+      return {
+        oppNetGain: Math.max(0, scores[0]),
+        firstCapture,
+        fenAfterAccept
+      };
+    } catch (e) {
+      return { oppNetGain: 0, firstCapture: null, fenAfterAccept: null };
+    }
+  }
+
+  // Chess.com-style Win% sigmoid for realistic accuracy & move classification
+  function cpToWinPct(cp) {
+    const clamped = Math.max(-2000, Math.min(2000, Number(cp) || 0));
+    return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * clamped)) - 1);
+  }
+
+  function isBookMoveV46(fenBefore, uci, plyIdx) {
+    if (customStartFen !== STD_FEN) return false;
+    if (typeof plyIdx === 'number' && plyIdx <= 3) return true;
+    if (typeof plyIdx !== 'number' && Array.isArray(timeline) && timeline.length <= 3) return true;
+    try {
+      const res = resolveMoveV46(fenBefore, uci);
+      if (!res) return false;
+      const prefix = typeof plyIdx === 'number'
+        ? (timeline || []).slice(0, plyIdx).map(t => t.san)
+        : (timeline || []).map(t => t.san);
+      const seq = prefix.concat([res.mv.san]).join(' ');
+      return Boolean(typeof OPENING_BOOK !== 'undefined' && OPENING_BOOK[seq]);
+    } catch (e) { return false; }
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. SINGLE UNIFIED TRUTH FUNCTION: verifyTrueBrilliantV46(...)
+  //    Used by BOTH the 'B' hotkey AND Post-Game Review (100% agreement!)
+  // -------------------------------------------------------------------------
+  function verifyTrueBrilliantV46(params) {
+    const {
+      fenBefore,
+      uci,
+      moverCpBefore,      // eval BEFORE move from mover's POV (number)
+      moverCpAfter,       // eval AFTER move from mover's POV (number)
+      moverMateAfter,     // positive integer if mover has forced mate after this move, else null
+      cpLossVsBest,       // >= 0 centipawns lost vs #1 engine move
+      gapOverSecond,      // eval gap over #2 move (optional, 0 if unknown)
+      plyIdx
+    } = params;
+
+    if (!fenBefore || !uci) return null;
+    if (isBookMoveV46(fenBefore, uci, plyIdx)) return null;
+
+    const resolved = resolveMoveV46(fenBefore, uci);
+    if (!resolved) return null;
+    const { mv, fenAfter } = resolved;
+
+    // 1. King moves are NEVER Brilliant sacrifices
+    if (mv.piece === 'k') return null;
+
+    // 2. Immediate Mate-in-1 is Checkmate, not a sacrifice
+    try {
+      const simA = new Chess(fenAfter);
+      if (simA.in_checkmate()) return null;
+    } catch (e) { return null; }
+
+    // 3. Must be a genuinely TOP move (zero blunders/inaccuracies!)
+    const isWinningMate = (moverMateAfter !== null && moverMateAfter !== undefined && moverMateAfter > 0 && moverMateAfter <= 7);
+    if (!isWinningMate && (cpLossVsBest === undefined || cpLossVsBest > 28)) return null;
+
+    // 4. Competitive position check (Chess.com rule: NOT already crushing by +4.5 material!)
+    const beforeCp = typeof moverCpBefore === 'number' ? moverCpBefore : 0;
+    const afterCp  = typeof moverCpAfter === 'number' ? moverCpAfter : beforeCp;
+
+    if (!isWinningMate) {
+      if (beforeCp >= 450) return null; // Already up a full Rook+ — giving away pieces isn't Brilliant
+      // Must end equal/winning (or be a brilliant saving sacrifice from losing -> drawn!)
+      const isWinningOrSolid = (afterCp >= 45);
+      const isSavingResource = (beforeCp <= -180 && afterCp >= -45);
+      if (!isWinningOrSolid && !isSavingResource) return null;
+    }
+
+    const mvVal  = PVAL[mv.piece] || 100;
+    const capVal = mv.captured ? (PVAL[mv.captured] || 100) : 0;
+
+    // 5A. DIRECT SACRIFICE: Moving N/B/R/Q where opponent genuinely wins >= 180cp net on mv.to (SEE!)
+    if (mv.piece !== 'p' && (mvVal - capVal >= 180)) {
+      const see = computeExactSeeOnSquareV46(fenAfter, mv.to);
+      const netMaterialDelta = capVal - see.oppNetGain; // negative means mover truly sacrifices material!
+      if (see.firstCapture && netMaterialDelta <= -180) {
+        return {
+          kind: 'direct',
+          sacPiece: mv.piece,
+          sacSq: mv.to,
+          netSacCp: Math.abs(netMaterialDelta),
+          acceptMove: see.firstCapture,
+          fenAfterAccept: see.fenAfterAccept
+        };
+      }
+    }
+
+    // 5B. INDIRECT EN-PRISE SACRIFICE (e.g., Légal's Mate, Traxler, ignoring an attacked Rook/Queen to win!)
+    // Strict guard: only counts if your move didn't just win an equal piece, opponent truly wins >= 280cp
+    // by taking your hanging N/B/R/Q, AND the move is genuinely critical (forced mate OR unique +80cp gap)!
+    if (capVal < 250 && (isWinningMate || (afterCp >= 90 && (gapOverSecond || 0) >= 80))) {
+      try {
+        const simA = new Chess(fenAfter);
+        const oppCaps = simA.moves({ verbose: true })
+          .filter(m => m.captured && m.to !== mv.to && (PVAL[m.captured] || 100) >= 320);
+
+        const testedSqs = new Set();
+        let bestIndirect = null;
+
+        for (let i = 0; i < oppCaps.length; i++) {
+          const sq = oppCaps[i].to;
+          if (testedSqs.has(sq)) continue;
+          testedSqs.add(sq);
+
+          const see = computeExactSeeOnSquareV46(fenAfter, sq);
+          const netLoss = see.oppNetGain - capVal;
+          if (see.firstCapture && netLoss >= 280) {
+            if (!bestIndirect || netLoss > bestIndirect.netSacCp) {
+              bestIndirect = {
+                kind: 'indirect',
+                sacPiece: oppCaps[i].captured,
+                sacSq: sq,
+                netSacCp: netLoss,
+                acceptMove: see.firstCapture,
+                fenAfterAccept: see.fenAfterAccept
+              };
+            }
+          }
+        }
+        if (bestIndirect) return bestIndirect;
+      } catch (e) {}
+    }
+
+    return null;
+  }
+
+  window._verifyTrueBrilliantV46 = verifyTrueBrilliantV46;
+
+  // -------------------------------------------------------------------------
+  // 5. REAL STOCKFISH POST-GAME REVIEW ENGINE FOR ONLINE 1v1 & HISTORY GAMES!
+  // -------------------------------------------------------------------------
+  let v46ReviewWorker = null;
+  let v46ReviewRunningSig = null;
+  const v46AnalyzedSigs = new Set();
+
+  function timelineNeedsRealAnalysisV46() {
+    if (!Array.isArray(timeline) || timeline.length < 2) return false;
+    // Check if moves past ply 3 are V42's un-analyzed 0-eval / null-bestMove placeholders!
+    let unanalyzedCount = 0;
+    const startIdx = (customStartFen === STD_FEN && timeline.length > 4) ? 4 : 0;
+    for (let i = startIdx; i < timeline.length; i++) {
+      const st = timeline[i];
+      if (!st) continue;
+      if (!st.bestMoveBefore && (Number(st.evalBeforeWhiteCp) || 0) === 0 && (Number(st.evalAfterWhiteCp) || 0) === 0) {
+        unanalyzedCount++;
+      }
+    }
+    return unanalyzedCount >= Math.max(2, Math.floor((timeline.length - startIdx) * 0.6));
+  }
+
+  function evaluateSingleFenWithWorker(worker, fen, movetimeMs = 150) {
+    return new Promise((resolve) => {
+      if (!worker) { resolve(null); return; }
+      const turnSign = (fen.split(' ')[1] === 'w') ? 1 : -1;
+      const pvMap = new Map();
+      let maxDepth = 0;
+      let done = false;
+
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(hardT);
+        worker.onmessage = null;
+
+        const p1 = pvMap.get(1);
+        const p2 = pvMap.get(2);
+        if (!p1) { resolve(null); return; }
+        resolve({
+          bestUci: p1.uci,
+          bestWhiteCp: p1.whiteCp,
+          bestMoverCp: p1.moverCp,
+          bestMoverMate: p1.moverMate,
+          pvTokens: p1.pvTokens,
+          secondMoverCp: p2 ? p2.moverCp : null,
+          secondMoverMate: p2 ? p2.moverMate : null,
+          depth: p1.depth
+        });
+      };
+
+      const hardT = setTimeout(() => {
+        try { worker.postMessage('stop'); } catch (e) {}
+        finish();
+      }, movetimeMs + 650);
+
+      worker.onmessage = (ev) => {
+        const line = typeof ev.data === 'string' ? ev.data : '';
+        if (!line) return;
+        if (line.startsWith('info ') && line.includes(' pv ') && line.includes(' score ')) {
+          const dM = line.match(/\bdepth (\d+)/);
+          const mpM = line.match(/\bmultipv (\d+)/);
+          const scM = line.match(/\bscore (cp|mate) (-?\d+)/);
+          const pvM = line.match(/\bpv ([^\n]+)/);
+          if (!dM || !scM || !pvM) return;
+
+          const d = parseInt(dM[1], 10);
+          if (d < maxDepth) return;
+          if (d > maxDepth) { maxDepth = d; pvMap.clear(); }
+
+          const mp = mpM ? parseInt(mpM[1], 10) : 1;
+          const isMate = scM[1] === 'mate';
+          const scVal = parseInt(scM[2], 10);
+          const moverCp = isMate ? (scVal > 0 ? 10000 - scVal * 20 : -10000 - scVal * 20) : scVal;
+          const pvTokens = pvM[1].trim().split(/\s+/);
+
+          pvMap.set(mp, {
+            uci: pvTokens[0],
+            pvTokens,
+            moverCp,
+            whiteCp: moverCp * turnSign,
+            moverMate: isMate ? scVal : null,
+            depth: d
+          });
+        } else if (line.startsWith('bestmove ')) {
+          finish();
+        }
+      };
+
+      try {
+        worker.postMessage('stop');
+        worker.postMessage(`position fen ${fen}`);
+        worker.postMessage(`go movetime ${movetimeMs}`);
+      } catch (e) {
+        finish();
+      }
+    });
+  }
+
+  function showAnalysisProgressV46(done, total, text) {
+    const tabRev = document.getElementById('tabContentReview');
+    if (tabRev) {
+      let box = document.getElementById('v46OnlineReviewProgress');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'v46OnlineReviewProgress';
+        box.innerHTML = `
+          <div class="flex items-center justify-between font-bold">
+            <span id="v46ProgLabel">⚡ Running Stockfish Analysis...</span>
+            <span id="v46ProgCount" class="text-[#81b64c]">0%</span>
+          </div>
+          <div id="v46ProgTrack"><div id="v46ProgFill"></div></div>
+        `;
+        tabRev.insertBefore(box, tabRev.firstChild);
+      }
+      if (done === null) {
+        box.classList.add('hidden');
+      } else {
+        box.classList.remove('hidden');
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        box.querySelector('#v46ProgLabel').textContent = text || '⚡ Analyzing Match with Stockfish...';
+        box.querySelector('#v46ProgCount').textContent = `${done}/${total} (${pct}%)`;
+        box.querySelector('#v46ProgFill').style.width = `${pct}%`;
+      }
+    }
+
+    const resSub = document.getElementById('v23ResSubline');
+    if (resSub && done !== null && done < total) {
+      if (!resSub.dataset.origSub) resSub.dataset.origSub = resSub.textContent || 'Match Complete';
+      resSub.textContent = `⚡ Stockfish analyzing game (${done}/${total})...`;
+    } else if (resSub && done === null && resSub.dataset.origSub) {
+      resSub.textContent = resSub.dataset.origSub;
+      delete resSub.dataset.origSub;
+    }
+  }
+
+  async function runRealStockfishPostGameReviewV46() {
+    if (!Array.isArray(timeline) || timeline.length === 0) return;
+    const sig = `${customStartFen}|${timeline.map(t => t.san).join(' ')}`;
+    if (v46ReviewRunningSig === sig || v46AnalyzedSigs.has(sig)) return;
+    v46ReviewRunningSig = sig;
+
+    const totalPos = timeline.length + 1;
+    showAnalysisProgressV46(0, totalPos, '⚡ Booting Stockfish MultiPV-2...');
+
+    if (!v46ReviewWorker) {
+      v46ReviewWorker = await createStockfishWorkerV46(2, 20);
+    }
+
+    const posEvals = new Array(totalPos).fill(null);
+    const fens = [timeline[0].fenBefore, ...timeline.map(t => t.fenAfter)];
+
+    // Evaluate every unique position ONCE (skip book plies 0..2 on standard start for speed)
+    for (let i = 0; i < fens.length; i++) {
+      // Abort if user started a brand new game mid-analysis!
+      if (`${customStartFen}|${timeline.map(t => t.san).join(' ')}` !== sig) {
+        v46ReviewRunningSig = null;
+        showAnalysisProgressV46(null, 0);
+        return;
+      }
+
+      const fen = fens[i];
+      showAnalysisProgressV46(i, totalPos, '⚡ Stockfish Analyzing Match...');
+
+      // Check terminal position (checkmate / draw) instantly
+      try {
+        const simEnd = new Chess(fen);
+        if (simEnd.in_checkmate()) {
+          const loserIsW = simEnd.turn() === 'w';
+          posEvals[i] = {
+            bestUci: null, bestWhiteCp: loserIsW ? -10000 : 10000,
+            bestMoverCp: -10000, bestMoverMate: 0, pvTokens: [], secondMoverCp: null, depth: 99
+          };
+          continue;
+        }
+        if (simEnd.in_draw() || simEnd.in_stalemate() || simEnd.in_threefold_repetition()) {
+          posEvals[i] = {
+            bestUci: null, bestWhiteCp: 0, bestMoverCp: 0, bestMoverMate: null, pvTokens: [], secondMoverCp: null, depth: 99
+          };
+          continue;
+        }
+      } catch (e) {}
+
+      // Standard opening ply 0..2 -> neutral quick baseline (still evaluates ply 3+ for move 3 accuracy!)
+      if (customStartFen === STD_FEN && i <= 2) {
+        posEvals[i] = {
+          bestUci: null, bestWhiteCp: 20, bestMoverCp: i % 2 === 0 ? 20 : -20,
+          bestMoverMate: null, pvTokens: [], secondMoverCp: null, depth: 12
+        };
+        continue;
+      }
+
+      let res = null;
+      if (v46ReviewWorker) {
+        res = await evaluateSingleFenWithWorker(v46ReviewWorker, fen, 145);
+      }
+
+      // Cloud fallback if local worker blocked
+      if (!res) {
+        try {
+          const ctrl = new AbortController();
+          const tId = setTimeout(() => ctrl.abort(), 1800);
+          const r = await fetch('https://chess-api.com/v1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fen, depth: 12, maxThinkingTime: 50 }),
+            signal: ctrl.signal
+          });
+          clearTimeout(tId);
+          if (r.ok) {
+            const d = await r.json();
+            const uci = d && (d.move || d.lan);
+            const tSign = fen.split(' ')[1] === 'w' ? 1 : -1;
+            const rawM = (d.mate !== null && d.mate !== undefined && d.mate !== '') ? Number(d.mate) : null;
+            const rawCp = (d.centipawns !== null && d.centipawns !== undefined && d.centipawns !== '')
+              ? Number(d.centipawns) : Math.round((Number(d.eval) || 0) * 100);
+            const whiteCp = rawM ? (rawM > 0 ? 10000 - rawM * 20 : -10000 - rawM * 20) : (isNaN(rawCp) ? 0 : rawCp);
+            res = {
+              bestUci: uci || null,
+              bestWhiteCp: whiteCp,
+              bestMoverCp: whiteCp * tSign,
+              bestMoverMate: rawM ? rawM * tSign : null,
+              pvTokens: Array.isArray(d.continuationArr) ? d.continuationArr : (uci ? [uci] : []),
+              secondMoverCp: null,
+              depth: Number(d.depth) || 12
+            };
+          }
+        } catch (e) {}
+      }
+
+      posEvals[i] = res || {
+        bestUci: null, bestWhiteCp: 0, bestMoverCp: 0, bestMoverMate: null, pvTokens: [], secondMoverCp: null, depth: 0
+      };
+    }
+
+    // Abort check before applying
+    if (`${customStartFen}|${timeline.map(t => t.san).join(' ')}` !== sig) {
+      v46ReviewRunningSig = null;
+      showAnalysisProgressV46(null, 0);
+      return;
+    }
+
+    // Classify every ply in `timeline` using our unified Stockfish + SEE truth rules!
+    const emptyC = () => ({ brilliant: 0, great: 0, best: 0, book: 0, excellent: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 });
+    const wc = emptyC(), bc = emptyC();
+    let wAccSum = 0, wN = 0, bAccSum = 0, bN = 0;
+
+    for (let i = 0; i < timeline.length; i++) {
+      const st = timeline[i];
+      const mv = st && st.moveObj;
+      if (!mv) continue;
+
+      const evB = posEvals[i] || { bestWhiteCp: 0, bestMoverCp: 0, pvTokens: [] };
+      const evA = posEvals[i + 1] || { bestWhiteCp: 0, bestMoverCp: 0, pvTokens: [] };
+      const sign = mv.color === 'w' ? 1 : -1;
+      const uciPlayed = mv.from + mv.to + (mv.promotion || '');
+
+      st.evalBeforeWhiteCp = evB.bestWhiteCp;
+      st.evalAfterWhiteCp  = evA.bestWhiteCp;
+
+      const bestRes = evB.bestUci ? resolveMoveV46(st.fenBefore, evB.bestUci) : null;
+      st.bestMoveBefore = bestRes ? bestRes.mv : mv;
+      st.bestPvBefore = expandPvV46(st.fenBefore, evB.pvTokens || [], 4).map(x => x.san);
+
+      const oppRes = evA.bestUci ? resolveMoveV46(st.fenAfter, evA.bestUci) : null;
+      st.oppBestReply = oppRes ? oppRes.mv : null;
+
+      const moverBefore = evB.bestWhiteCp * sign;
+      const moverAfter  = evA.bestWhiteCp * sign;
+      const playedTop   = Boolean(evB.bestUci && evB.bestUci.slice(0, 4) === uciPlayed.slice(0, 4));
+      const cpLoss      = playedTop ? 0 : Math.max(0, moverBefore - moverAfter);
+      st.cpLoss = Math.round(cpLoss);
+
+      // Expected Points / Win% drop (Chess.com style!)
+      const winBefore = cpToWinPct(moverBefore);
+      const winAfter  = cpToWinPct(moverAfter);
+      const winLoss   = playedTop ? 0 : Math.max(0, winBefore - winAfter);
+
+      const gapOver2  = (typeof evB.secondMoverCp === 'number') ? (evB.bestMoverCp - evB.secondMoverCp) : 0;
+      const moverMateAfter = (evA.bestMoverMate !== null && evA.bestMoverMate !== undefined && evA.bestMoverMate < 0)
+        ? Math.abs(evA.bestMoverMate)
+        : (mv.san.includes('#') ? 1 : null);
+
+      const isBook = isBookMoveV46(st.fenBefore, uciPlayed, i);
+      const brilInfo = !isBook ? verifyTrueBrilliantV46({
+        fenBefore: st.fenBefore,
+        uci: uciPlayed,
+        moverCpBefore: moverBefore,
+        moverCpAfter: moverAfter,
+        moverMateAfter,
+        cpLossVsBest: cpLoss,
+        gapOverSecond: gapOver2,
+        plyIdx: i
+      }) : null;
+
+      let cls = CLASSIFICATIONS.good;
+      let comment = `${mv.san} is a solid move.`;
+
+      if (isBook) {
+        cls = CLASSIFICATIONS.book;
+        st.cpLoss = 0;
+        comment = `${mv.san} is standard opening theory.`;
+      } else if (brilInfo) {
+        cls = CLASSIFICATIONS.brilliant;
+        const pLbl = PNAME[brilInfo.sacPiece] || 'piece';
+        comment = `💎 BRILLIANT! ${mv.san} sacrifices the ${pLbl} on ${brilInfo.sacSq} — accepting with ${brilInfo.acceptMove.san} walks into a winning tactic!`;
+        st.brilliantInfoV21 = null;
+      } else if (playedTop && gapOver2 >= 165 && moverBefore >= -260 && moverBefore <= 450 && !mv.captured) {
+        cls = CLASSIFICATIONS.great;
+        comment = `! GREAT MOVE! ${mv.san} was the only move keeping a strong position.`;
+      } else if (playedTop || (cpLoss <= 12 && winLoss <= 1.2)) {
+        cls = CLASSIFICATIONS.best;
+        comment = `★ ${mv.san} is the top Stockfish move.`;
+      } else if (winLoss <= 2.8 || cpLoss <= 30) {
+        cls = CLASSIFICATIONS.excellent;
+        comment = `${mv.san} is an excellent move keeping the position strong.`;
+      } else if (winLoss <= 6.2 || cpLoss <= 75) {
+        cls = CLASSIFICATIONS.good;
+        comment = `${mv.san} is playable; ${st.bestMoveBefore ? st.bestMoveBefore.san : 'another line'} was slightly stronger.`;
+      } else if (winLoss <= 11.5) {
+        cls = CLASSIFICATIONS.inaccuracy;
+        comment = `${mv.san} is an inaccuracy. ${st.bestMoveBefore ? `${st.bestMoveBefore.san} was stronger.` : ''}`;
+      } else if (winLoss <= 20.5) {
+        cls = CLASSIFICATIONS.mistake;
+        comment = `${mv.san} is a mistake! ${st.bestMoveBefore ? `Play ${st.bestMoveBefore.san} instead.` : ''}`;
+      } else {
+        cls = CLASSIFICATIONS.blunder;
+        comment = `${mv.san} is a blunder! ${st.bestMoveBefore ? `${st.bestMoveBefore.san} was much better.` : ''}`;
+      }
+
+      st.classification = cls;
+      st.coachComment = comment;
+      st._deepAnalyzedV21 = true;
+
+      const cObj = mv.color === 'w' ? wc : bc;
+      if (cObj[cls.key] !== undefined) cObj[cls.key]++;
+
+      let mvAcc = 103.1668 * Math.exp(-0.04354 * winLoss) - 3.1669;
+      if (['book', 'brilliant', 'great', 'best'].includes(cls.key)) mvAcc = 100;
+      mvAcc = Math.max(0, Math.min(100, mvAcc));
+      if (mv.color === 'w') { wAccSum += mvAcc; wN++; } else { bAccSum += mvAcc; bN++; }
+    }
+
+    const wAcc = wN > 0 ? Math.round(wAccSum / wN) : 80;
+    const bAcc = bN > 0 ? Math.round(bAccSum / bN) : 80;
+    const calcElo = (acc, cnt, n) => {
+      if (n === 0) return 400;
+      let e = 150 + Math.pow(acc / 100, 2.2) * 2350 + cnt.brilliant * 110 + cnt.great * 45 - cnt.blunder * 75 - cnt.mistake * 30;
+      if (n < 5) e = Math.min(e, 1450);
+      return Math.max(150, Math.min(2850, Math.round(e / 10) * 10));
+    };
+    const wElo = calcElo(wAcc, wc, wN);
+    const bElo = calcElo(bAcc, bc, bN);
+
+    v46AnalyzedSigs.add(sig);
+    v46ReviewRunningSig = null;
+    showAnalysisProgressV46(null, 0);
+
+    // Update the Post-Game Result Modal with REAL Stockfish Accuracy, ELO & Brilliant counts!
+    const setT = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const setH = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+    setT('v23ResWElo', `⚡ ${wElo} ELO`);
+    setT('v23ResWAcc', `${wAcc}%`);
+    setH('v23ResWCounts', `💎 ${wc.brilliant} Brilliant • ❗ ${wc.great} Great • ❌ ${wc.blunder} Blunder`);
+    setT('v23ResBElo', `⚡ ${bElo} ELO`);
+    setT('v23ResBAcc', `${bAcc}%`);
+    setH('v23ResBCounts', `💎 ${bc.brilliant} Brilliant • ❗ ${bc.great} Great • ❌ ${bc.blunder} Blunder`);
+
+    // Update saved Match History entry with the real Stockfish scores!
+    if (Array.isArray(window._matchHistoryV26) && window._matchHistoryV26.length > 0) {
+      const sanStr = timeline.map(t => t.san).join(' ');
+      const histHit = window._matchHistoryV26.find(h => Array.isArray(h.movesSan) && h.movesSan.join(' ') === sanStr);
+      if (histHit) {
+        histHit.wElo = wElo; histHit.bElo = bElo;
+        histHit.wAcc = wAcc; histHit.bAcc = bAcc;
+        if (typeof window.saveAndRenderProfile === 'function') window.saveAndRenderProfile(0);
+      }
+    }
+
+    // Refresh Review UI, Eval Bar & Move List cleanly!
+    if (typeof window.updateGameReviewTabUI === 'function') window.updateGameReviewTabUI();
+    if (typeof window.updateCoachAndMoveListUI === 'function') window.updateCoachAndMoveListUI();
+    if (typeof updateEvalBarUI === 'function' && timeline.length > 0) {
+      try { updateEvalBarUI(timeline[Math.max(0, viewPlyIndex)].evalAfterWhiteCp || 0); } catch (e) {}
+    }
+    if (typeof window.renderBoard === 'function') window.renderBoard();
+  }
+
+  // Trigger real Stockfish post-game analysis whenever an un-analyzed Online/2P match finishes or opens in Review!
+  if (typeof window.updateGameReviewTabUI === 'function') {
+    const prevRevV46 = window.updateGameReviewTabUI;
+    window.updateGameReviewTabUI = function() {
+      const out = prevRevV46.apply(this, arguments);
+      if (timelineNeedsRealAnalysisV46()) {
+        runRealStockfishPostGameReviewV46();
+      }
+      return out;
+    };
+  }
+
+  const resModal = document.getElementById('v23TwoPlayerResultModal');
+  if (resModal && typeof MutationObserver !== 'undefined') {
+    const resObs = new MutationObserver(() => {
+      if (!resModal.classList.contains('hidden') && timelineNeedsRealAnalysisV46()) {
+        runRealStockfishPostGameReviewV46();
+      }
+    });
+    resObs.observe(resModal, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  // -------------------------------------------------------------------------
+  // 6. REBUILT 'B' HOTKEY ENGINE (PASS: "chessmog") WITH STRICT REAL BRILLIANTS
+  // -------------------------------------------------------------------------
+  let v46Unlocked = false;
+  let v46ActiveDraw = null;
+  let v46ReqTok = 0;
+  let v46SfWorker = null;
+  let v46SfBooting = false;
+  let v46SfLineCb = null;
+  const v46Cache = new Map();
+  const v46FollowCache = new Map();
+
+  function setupPassDrawerV46() {
+    let drawer = document.getElementById('v38PassDrawer');
+    if (!drawer) {
+      drawer = document.createElement('div');
+      drawer.id = 'v38PassDrawer';
+      drawer.className = 'hidden';
+      document.body.appendChild(drawer);
+    }
+
+    // Own IDs cleanly so V38/V39/V40/V41 stay completely silent!
+    drawer.innerHTML = `
+      <span id="v38PassLabel" style="font-size:11.5px;font-weight:700;color:#9e9c99;user-select:none;">Pass:</span>
+      <input id="v46PassInput" type="password" autocomplete="off" spellcheck="false"
+        style="width:106px;padding:4px 8px;border-radius:6px;background:#131210;border:1px solid rgba(255,255,255,0.14);color:#eae8e4;font-size:12px;outline:none;" />
+      <span id="v46PassCheck" class="hidden" title="Active"
+        style="width:22px;height:22px;border-radius:99px;background:rgba(129,182,76,0.18);border:1px solid #81b64c;color:#81b64c;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;">✓</span>
+    `;
+
+    const inp = drawer.querySelector('#v46PassInput');
+    const chk = drawer.querySelector('#v46PassCheck');
+    const syncChk = () => chk.classList.toggle('hidden', !v46Unlocked);
+
+    const checkPass = () => {
+      const val = (inp.value || '').trim().toLowerCase();
+      if (val === SECRET_PASS) {
+        v46Unlocked = true;
+        inp.value = '';
+        syncChk();
+        warmMogWorkerV46();
+        setTimeout(() => drawer.classList.add('hidden'), 700);
+      } else if (val === 'off' || val === 'lock') {
+        v46Unlocked = false;
+        inp.value = '';
+        clearStealthV46();
+        syncChk();
+        setTimeout(() => drawer.classList.add('hidden'), 300);
+      }
+    };
+
+    inp.addEventListener('input', checkPass);
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); checkPass(); }
+      if (e.key === 'Escape') { e.preventDefault(); drawer.classList.add('hidden'); }
+    });
+    chk.addEventListener('click', () => {
+      v46Unlocked = false;
+      clearStealthV46();
+      syncChk();
+    });
+
+    if (typeof MutationObserver !== 'undefined') {
+      const o = new MutationObserver(() => {
+        if (!drawer.classList.contains('hidden')) {
+          syncChk();
+          inp.value = '';
+          setTimeout(() => inp.focus(), 30);
+        }
+      });
+      o.observe(drawer, { attributes: true, attributeFilter: ['class'] });
+    }
+  }
+  setupPassDrawerV46();
+
+  function warmMogWorkerV46() {
+    if (v46SfWorker || v46SfBooting) return;
+    v46SfBooting = true;
+    createStockfishWorkerV46(4, 35).then((w) => {
+      v46SfBooting = false;
+      v46SfWorker = w;
+      if (w) {
+        w.onmessage = (ev) => {
+          const ln = typeof ev.data === 'string' ? ev.data : '';
+          if (ln && v46SfLineCb) {
+            try { v46SfLineCb(ln); } catch (e) {}
+          }
+        };
+      }
+    });
+  }
+
+  function findInstantMateV46(fen) {
+    try {
+      const sim = new Chess(fen);
+      const legs = sim.moves({ verbose: true });
+      for (let i = 0; i < legs.length; i++) {
+        if (legs[i].san.includes('#')) {
+          const m = legs[i];
+          return { uci: m.from + m.to + (m.promotion || ''), moverMate: 1, moverCp: 10000, depth: 99, pvTokens: [m.from + m.to + (m.promotion || '')] };
+        }
+      }
+      const dl = Date.now() + 45;
+      const ord = legs.slice().sort((a, b) => ((b.san.includes('+') ? 100 : 0) + (b.captured ? 30 : 0)) - ((a.san.includes('+') ? 100 : 0) + (a.captured ? 30 : 0)));
+      for (let i = 0; i < ord.length; i++) {
+        if (Date.now() > dl) break;
+        const m1 = ord[i];
+        sim.move(m1);
+        const reps = sim.moves({ verbose: true });
+        if (!reps.length) { sim.undo(); continue; }
+        let ok = true, sRep = reps[0], sM2 = null;
+        for (let r = 0; r < reps.length; r++) {
+          if (Date.now() > dl) { ok = false; break; }
+          sim.move(reps[r]);
+          const m2 = sim.moves({ verbose: true }).find(x => x.san.includes('#'));
+          sim.undo();
+          if (!m2) { ok = false; break; }
+          if (r === 0) { sRep = reps[r]; sM2 = m2; }
+        }
+        sim.undo();
+        if (ok && sM2) {
+          return {
+            uci: m1.from + m1.to + (m1.promotion || ''),
+            moverMate: 2, moverCp: 9960, depth: 99,
+            pvTokens: [
+              m1.from + m1.to + (m1.promotion || ''),
+              sRep.from + sRep.to + (sRep.promotion || ''),
+              sM2.from + sM2.to + (sM2.promotion || '')
+            ]
+          };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function buildHistCtxV46(curFen) {
+    const counts = new Map();
+    const ucis = [];
+    let ok = false;
+    try {
+      const startF = (typeof customStartFen === 'string' && customStartFen) ? customStartFen : STD_FEN;
+      counts.set(fenKey4(startF), 1);
+      if (Array.isArray(timeline) && timeline.length > 0) {
+        const sim = new Chess(startF);
+        let good = true;
+        for (let i = 0; i < timeline.length; i++) {
+          const mv = timeline[i] && timeline[i].moveObj;
+          if (!mv) { good = false; break; }
+          const ex = sim.move({ from: mv.from, to: mv.to, promotion: mv.promotion || 'q' });
+          if (!ex) { good = false; break; }
+          ucis.push(ex.from + ex.to + (ex.promotion || ''));
+          const k = fenKey4(sim.fen());
+          counts.set(k, (counts.get(k) || 0) + 1);
+        }
+        if (good && fenKey4(sim.fen()) === fenKey4(curFen)) ok = true;
+      }
+    } catch (e) {}
+
+    const repeatingUcis = new Set(), threefoldUcis = new Set(), nonRepeatingUcis = [];
+    try {
+      const sim = new Chess(curFen);
+      sim.moves({ verbose: true }).forEach(m => {
+        sim.move(m);
+        const cnt = counts.get(fenKey4(sim.fen())) || 0;
+        const u = m.from + m.to + (m.promotion || '');
+        if (cnt >= 2) threefoldUcis.add(u);
+        if (cnt >= 1) repeatingUcis.add(u);
+        else nonRepeatingUcis.push(u);
+        sim.undo();
+      });
+    } catch (e) {}
+
+    const uciPosCmd = (ok && ucis.length > 0)
+      ? ((customStartFen === STD_FEN ? 'position startpos moves ' : `position fen ${customStartFen} moves `) + ucis.join(' '))
+      : `position fen ${curFen}`;
+
+    return { uciPosCmd, repeatingUcis, threefoldUcis, nonRepeatingUcis };
+  }
+
+  function pvRankValV46(pv) {
+    if (pv.moverMate !== null && pv.moverMate !== undefined) {
+      return pv.moverMate > 0 ? (100000 - pv.moverMate * 100) : (-100000 - pv.moverMate * 100);
+    }
+    return typeof pv.moverCp === 'number' ? pv.moverCp : 0;
+  }
+
+  // Strictly picks & classifies using unified `verifyTrueBrilliantV46`!
+  function pickStrictFromPvsV46(fen, pvList, histCtx) {
+    if (!pvList || !pvList.length) return null;
+    const byU = new Map();
+    pvList.forEach(p => {
+      if (!p || !p.uci) return;
+      const prev = byU.get(p.uci);
+      if (!prev || (p.depth || 0) > (prev.depth || 0)) byU.set(p.uci, p);
+    });
+    const sorted = Array.from(byU.values()).sort((a, b) => pvRankValV46(b) - pvRankValV46(a));
+    if (!sorted.length) return null;
+
+    const top = sorted[0];
+    const second = sorted.length > 1 ? sorted[1] : null;
+    const topScore = pvRankValV46(top);
+    const secScore = second ? pvRankValV46(second) : null;
+    const plyNow = Array.isArray(timeline) ? timeline.length : 0;
+
+    // 1. Check ONLY top moves within <= 25cp of #1 (or forced mate) through strict SEE Brilliant verifier!
+    for (let i = 0; i < sorted.length; i++) {
+      const c = sorted[i];
+      const cScore = pvRankValV46(c);
+      if ((c.depth || 0) < 10) continue;
+      if (histCtx.threefoldUcis.has(c.uci) && cScore >= 60) continue;
+
+      const cpLoss = Math.max(0, topScore - cScore);
+      const topIsMate = (top.moverMate !== null && top.moverMate > 0);
+      const cIsMate = (c.moverMate !== null && c.moverMate > 0);
+      if (topIsMate && (!cIsMate || c.moverMate > top.moverMate + 1)) continue;
+
+      const gap = second ? (cScore - secScore) : 0;
+      const sac = verifyTrueBrilliantV46({
+        fenBefore: fen,
+        uci: c.uci,
+        moverCpBefore: topScore,
+        moverCpAfter: cScore,
+        moverMateAfter: cIsMate ? c.moverMate : null,
+        cpLossVsBest: cpLoss,
+        gapOverSecond: gap,
+        plyIdx: plyNow
+      });
+      if (sac) {
+        return { ...c, moveType: 'brilliant', sacInfo: sac };
+      }
+    }
+
+    // 2. Otherwise pick #1 (skipping 3-fold draw when winning)
+    let chosen = top;
+    if ((histCtx.threefoldUcis.has(top.uci) || (histCtx.repeatingUcis.has(top.uci) && topScore >= 220)) && sorted.length > 1) {
+      const alt = sorted.find(p => !histCtx.repeatingUcis.has(p.uci) && pvRankValV46(p) >= 100);
+      if (alt) chosen = alt;
+    }
+
+    let moveType = 'best';
+    if (chosen.moverMate !== null && chosen.moverMate > 0) moveType = 'mate';
+    else if (isBookMoveV46(fen, chosen.uci, plyNow)) moveType = 'book';
+    else if (second && chosen === top && (topScore - secScore >= 165) && topScore >= -240 && topScore <= 450) {
+      const rMv = resolveMoveV46(fen, chosen.uci);
+      if (rMv && !rMv.mv.captured) moveType = 'great';
+    }
+
+    return { ...chosen, moveType, sacInfo: null };
+  }
+
+  // Stealth SVG & Pill Renderer
+  function sqCenterV46(sq) {
+    if (!sq || sq.length < 2) return null;
+    const f = FILES.indexOf(sq[0]), r = parseInt(sq[1], 10);
+    if (f < 0 || isNaN(r)) return null;
+    const col = boardFlipped ? (7 - f) : f;
+    const row = boardFlipped ? (r - 1) : (8 - r);
+    return { x: col * 100 + 50, y: row * 100 + 50, col, row };
+  }
+
+  function polyArrowV46(x1, y1, x2, y2, sw = 9.5, hw = 21) {
+    const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy);
+    if (L < 22) return '';
+    const ux = dx / L, uy = dy / L, px = -uy, py = ux;
+    const so = Math.min(18, L * 0.16), to = Math.min(14, L * 0.12);
+    const hl = Math.min(34, Math.max(21, Math.max(24, L - so - to) * 0.44));
+    const sx = x1 + ux * so, sy = y1 + uy * so;
+    const tx = x2 - ux * to, ty = y2 - uy * to;
+    const bx = tx - ux * hl, by = ty - uy * hl;
+    return [
+      [sx + px * sw, sy + py * sw], [bx + px * sw, by + py * sw],
+      [bx + px * hw, by + py * hw], [tx, ty],
+      [bx - px * hw, by - py * hw], [bx - px * sw, by - py * sw],
+      [sx - px * sw, sy - py * sw]
+    ].map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  }
+
+  function ensureStealthDomV46() {
+    if (!boardEl || !boardEl.parentElement) return null;
+    const p = boardEl.parentElement;
+    if (getComputedStyle(p).position === 'static') p.style.position = 'relative';
+    let host = document.getElementById('v38StealthHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'v38StealthHost';
+      host.className = 'hidden';
+      host.innerHTML = `<svg id="v38StealthCanvas" viewBox="0 0 800 800" preserveAspectRatio="none"></svg>`;
+      p.appendChild(host);
+    }
+    host.style.left = `${boardEl.offsetLeft}px`;
+    host.style.top = `${boardEl.offsetTop}px`;
+    host.style.width = `${boardEl.offsetWidth}px`;
+    host.style.height = `${boardEl.offsetHeight}px`;
+
+    let pill = document.getElementById('v38StealthPill');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'v38StealthPill';
+      pill.className = 'hidden';
+      p.appendChild(pill);
+    }
+    return { host, svg: host.querySelector('#v38StealthCanvas'), pill };
+  }
+
+  function clearStealthV46() {
+    v46ActiveDraw = null;
+    v46ReqTok++;
+    v46SfLineCb = null;
+    if (v46SfWorker) { try { v46SfWorker.postMessage('stop'); } catch (e) {} }
+    const host = document.getElementById('v38StealthHost');
+    const pill = document.getElementById('v38StealthPill');
+    if (host) {
+      host.classList.add('hidden');
+      const s = host.querySelector('#v38StealthCanvas');
+      if (s) s.innerHTML = '';
+    }
+    if (pill) pill.classList.add('hidden');
+  }
+
+  const STYLES_V46 = {
+    mate:      { color: '#f7c045', badge: '👑 MATE',      mark: ''   },
+    brilliant: { color: '#24d1c6', badge: '💎 BRILLIANT', mark: '!!' },
+    great:     { color: '#32b8e6', badge: '! GREAT',      mark: '!'  },
+    book:      { color: '#d4a373', badge: '📖 BOOK',      mark: ''   },
+    best:      { color: '#81b64c', badge: '★ BEST',       mark: ''   }
+  };
+
+  function renderStealthV46(draw) {
+    const els = ensureStealthDomV46();
+    if (!els || !draw || !draw.from || !draw.to) return;
+    v46ActiveDraw = draw;
+
+    const p1 = sqCenterV46(draw.from), p2 = sqCenterV46(draw.to);
+    if (!p1 || !p2) return;
+    const st = STYLES_V46[draw.moveType] || STYLES_V46.best;
+    const col = st.color;
+    let out = '';
+
+    if (draw.replyFrom && draw.replyTo) {
+      const r1 = sqCenterV46(draw.replyFrom), r2 = sqCenterV46(draw.replyTo);
+      if (r1 && r2) {
+        const rp = polyArrowV46(r1.x, r1.y, r2.x, r2.y, 5.5, 13);
+        if (rp) out += `<polygon points="${rp}" fill="#ef4444" fill-opacity="0.46" stroke="rgba(15,14,12,0.35)" stroke-width="1.2" />`;
+      }
+    }
+
+    if (draw.followFrom && draw.followTo && (draw.moveType === 'brilliant' || draw.moveType === 'mate')) {
+      const f1 = sqCenterV46(draw.followFrom), f2 = sqCenterV46(draw.followTo);
+      if (f1 && f2) {
+        const fp = polyArrowV46(f1.x, f1.y, f2.x, f2.y, 6.5, 15);
+        if (fp) out += `<polygon points="${fp}" fill="${col}" fill-opacity="0.62" stroke="rgba(15,14,12,0.45)" stroke-width="1.4" />`;
+        out += `<circle cx="${f2.col * 100 + 82}" cy="${f2.row * 100 + 18}" r="13" fill="${col}" stroke="#141311" stroke-width="2" />`;
+        out += `<text x="${f2.col * 100 + 82}" y="${f2.row * 100 + 23}" text-anchor="middle" fill="#141311" font-size="14" font-weight="900" font-family="Inter, sans-serif">2</text>`;
+      }
+    }
+
+    if (draw.moveType === 'brilliant' || draw.moveType === 'mate' || draw.moveType === 'great') {
+      const x0 = p2.col * 100 + 5, y0 = p2.row * 100 + 5;
+      out += `<rect x="${x0}" y="${y0}" width="90" height="90" rx="11" fill="${col}" fill-opacity="0.18" stroke="${col}" stroke-width="5.5" />`;
+      if (st.mark) {
+        out += `<circle cx="${x0 + 78}" cy="${y0 + 12}" r="14" fill="${col}" stroke="#141311" stroke-width="2" />`;
+        out += `<text x="${x0 + 78}" y="${y0 + 17}" text-anchor="middle" fill="#141311" font-size="13" font-weight="900" font-family="Inter, sans-serif">${st.mark}</text>`;
+      }
+    }
+
+    const pts = polyArrowV46(p1.x, p1.y, p2.x, p2.y, 9.5, 21.5);
+    if (pts) out += `<polygon points="${pts}" fill="${col}" fill-opacity="0.92" stroke="rgba(15,14,12,0.55)" stroke-width="1.8" stroke-linejoin="round" />`;
+
+    els.svg.innerHTML = out;
+    els.host.classList.remove('hidden');
+
+    let evalStr = '';
+    if (draw.moverMate !== null && draw.moverMate !== undefined) {
+      evalStr = draw.moverMate > 0 ? `M${draw.moverMate}` : `-M${Math.abs(draw.moverMate)}`;
+    } else if (typeof draw.moverCp === 'number') {
+      evalStr = `${draw.moverCp >= 0 ? '+' : ''}${(draw.moverCp / 100).toFixed(1)}`;
+    }
+
+    let seqStr = draw.acceptSeqText || (draw.pvSteps && draw.pvSteps.length > 1 ? draw.pvSteps.slice(1, 4).map(s => s.san).join(' → ') : '');
+    const dStr = draw.depth && draw.depth < 90 ? ` d${draw.depth}` : '';
+
+    els.pill.innerHTML = `
+      <span style="color:${col};font-weight:800;">${st.badge}</span>
+      <span style="color:#ffffff;font-weight:800;">${draw.san}${st.mark}</span>
+      <span style="color:#9e9c99;font-size:10px;">${evalStr}${dStr}</span>
+      ${seqStr ? `<span style="color:#c7c5c0;font-size:10px;border-left:1px solid rgba(255,255,255,0.16);padding-left:6px;margin-left:2px;">${seqStr}</span>` : ''}
+    `;
+    els.pill.classList.remove('hidden');
+  }
+
+  async function solveAcceptPunishV46(drawObj, sacInfo, tok) {
+    if (!sacInfo || !sacInfo.fenAfterAccept || !sacInfo.acceptMove) return;
+    const accFen = sacInfo.fenAfterAccept;
+    const sign = accFen.split(' ')[1] === 'w' ? 1 : -1;
+
+    const applyFollow = (seq, mMate, mCp, depth) => {
+      if (!seq || !seq.length) return;
+      v46FollowCache.set(fenKey4(accFen), {
+        uci: seq[0].uci, from: seq[0].from, to: seq[0].to, san: seq[0].san,
+        moveType: (mMate && mMate > 0) ? 'mate' : 'best',
+        moverMate: mMate, moverCp: mCp, depth, pvSteps: seq
+      });
+      if (tok !== v46ReqTok || !v46ActiveDraw || v46ActiveDraw.uci !== drawObj.uci) return;
+      drawObj.acceptSeqText = `if ${sacInfo.acceptMove.san} → ${seq.slice(0, 3).map(s => s.san).join(' ')}`;
+      drawObj.replyFrom = sacInfo.acceptMove.from;
+      drawObj.replyTo   = sacInfo.acceptMove.to;
+      drawObj.followFrom = seq[0].from;
+      drawObj.followTo   = seq[0].to;
+      renderStealthV46(drawObj);
+    };
+
+    const imm = findInstantMateV46(accFen);
+    if (imm) {
+      applyFollow(expandPvV46(accFen, imm.pvTokens, 4), imm.moverMate, null, 99);
+      return;
+    }
+
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 2600);
+      const r = await fetch('https://chess-api.com/v1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fen: accFen, depth: 16, maxThinkingTime: 85 }),
+        signal: ctrl.signal
+      });
+      clearTimeout(tid);
+      if (!r.ok) return;
+      const d = await r.json();
+      const uci = d && (d.move || d.lan);
+      if (!uci) return;
+      const cont = Array.isArray(d.continuationArr) ? d.continuationArr : [];
+      const toks = cont[0] === uci ? cont : [uci, ...cont];
+      const rawM = (d.mate !== null && d.mate !== undefined && d.mate !== '') ? Number(d.mate) : null;
+      const rawCp = (d.centipawns !== null && d.centipawns !== undefined && d.centipawns !== '') ? Number(d.centipawns) : Math.round((Number(d.eval) || 0) * 100);
+      applyFollow(expandPvV46(accFen, toks, 4), rawM ? rawM * sign : null, isNaN(rawCp) ? 0 : rawCp * sign, Number(d.depth) || 16);
+    } catch (e) {}
+  }
+
+  function prioV46(picked, tier) {
+    const isWinM = (picked.moverMate !== null && picked.moverMate > 0);
+    if (isWinM) return 3000000 - Math.min(99, picked.moverMate) * 1000 + (picked.moveType === 'brilliant' ? 400 : 0) + Math.min(99, picked.depth || 15);
+    if (picked.moveType === 'brilliant') return 2000000 + tier * 100 + (picked.depth || 10) * 50;
+    if (picked.moverMate !== null && picked.moverMate < 0) return -1000000 + Math.min(99, Math.abs(picked.moverMate)) * 1000 + (picked.depth || 0);
+    return 100000 + tier * 200 + (picked.depth || 10) * 100;
+  }
+
+  function runStrictMogEngineV46() {
+    if (!v46Unlocked || isEditorMode || game.game_over()) return;
+    if (v46ActiveDraw) { clearStealthV46(); return; }
+
+    const fen = game.fen();
+    const sign = game.turn() === 'w' ? 1 : -1;
+    const histCtx = buildHistCtxV46(fen);
+    const els = ensureStealthDomV46();
+    if (!els) return;
+
+    const tok = ++v46ReqTok;
+
+    const pre = v46FollowCache.get(fenKey4(fen));
+    if (pre) {
+      const st = pre.pvSteps || [];
+      renderStealthV46({ ...pre, replyFrom: st[1]?.from, replyTo: st[1]?.to, followFrom: st[2]?.from, followTo: st[2]?.to });
+    } else {
+      els.pill.innerHTML = `<span class="v38-think-dot"></span><span>...</span>`;
+      els.pill.classList.remove('hidden');
+    }
+
+    // 1. Instant M1 / M2 Solver
+    const imm = findInstantMateV46(fen);
+    if (imm) {
+      const steps = expandPvV46(fen, imm.pvTokens, 4);
+      if (steps.length) {
+        const sac = verifyTrueBrilliantV46({
+          fenBefore: fen, uci: imm.uci, moverCpBefore: 0, moverCpAfter: 10000,
+          moverMateAfter: imm.moverMate, cpLossVsBest: 0, gapOverSecond: 500, plyIdx: timeline.length
+        });
+        renderStealthV46({
+          uci: steps[0].uci, from: steps[0].from, to: steps[0].to, san: steps[0].san,
+          moveType: sac ? 'brilliant' : 'mate',
+          moverMate: imm.moverMate, moverCp: null, depth: 99, pvSteps: steps,
+          replyFrom: steps[1]?.from, replyTo: steps[1]?.to,
+          followFrom: steps[2]?.from, followTo: steps[2]?.to
+        });
+        return;
+      }
+    }
+
+    const cached = v46Cache.get(fen);
+    if (cached && !histCtx.repeatingUcis.has(cached.uci)) {
+      renderStealthV46(cached);
+      return;
+    }
+
+    let bestPrio = -9999999;
+    function acceptPick(picked, tier) {
+      if (tok !== v46ReqTok || game.fen() !== fen || !picked || !picked.uci) return;
+      const res = resolveMoveV46(fen, picked.uci);
+      if (!res) return;
+      const mv = res.mv;
+      let mMate = (picked.moverMate !== undefined) ? picked.moverMate : null;
+      if (mv.san.includes('#')) mMate = 1;
+
+      const enr = { ...picked, moverMate: mMate };
+      const pr = prioV46(enr, tier);
+      if (pr <= bestPrio) return;
+      bestPrio = pr;
+
+      const toks = Array.isArray(picked.pvTokens) && picked.pvTokens.length ? picked.pvTokens : [picked.uci];
+      const steps = expandPvV46(fen, toks, 5);
+
+      const draw = {
+        uci: mv.from + mv.to + (mv.promotion || ''),
+        from: mv.from, to: mv.to, san: mv.san,
+        moveType: (mMate !== null && mMate > 0 && picked.moveType !== 'brilliant') ? 'mate' : picked.moveType,
+        moverCp: picked.moverCp, moverMate: mMate, depth: picked.depth || 0,
+        pvSteps: steps, sacInfo: picked.sacInfo || null,
+        replyFrom: steps[1]?.from, replyTo: steps[1]?.to,
+        followFrom: steps[2]?.from, followTo: steps[2]?.to,
+        acceptSeqText: null
+      };
+
+      if (steps.length >= 3 && steps[1].fenAfter) {
+        v46FollowCache.set(fenKey4(steps[1].fenAfter), {
+          uci: steps[2].uci, from: steps[2].from, to: steps[2].to, san: steps[2].san,
+          moveType: (mMate && mMate > 1) ? 'mate' : 'best',
+          moverMate: (mMate && mMate > 1) ? mMate - 1 : null,
+          moverCp: picked.moverCp, depth: picked.depth || 14, pvSteps: steps.slice(2)
+        });
+      }
+
+      if (pr >= 102000) {
+        v46Cache.set(fen, draw);
+        if (v46Cache.size > 80) v46Cache.delete(v46Cache.keys().next().value);
+      }
+
+      renderStealthV46(draw);
+      if (draw.moveType === 'brilliant' && draw.sacInfo) {
+        solveAcceptPunishV46(draw, draw.sacInfo, tok);
+      }
+    }
+
+    // Engine 1: Lichess Cloud (MultiPV 4, d30+)
+    (async () => {
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 2400);
+        const r = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}&multiPv=4`, { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!d || !Array.isArray(d.pvs) || !d.pvs.length) return;
+        const pvs = d.pvs.map(pv => {
+          const toks = (pv.moves || '').trim().split(/\s+/);
+          return {
+            uci: toks[0], pvTokens: toks,
+            moverCp: typeof pv.cp === 'number' ? pv.cp * sign : null,
+            moverMate: typeof pv.mate === 'number' ? pv.mate * sign : null,
+            depth: Number(d.depth) || 32
+          };
+        }).filter(x => x.uci);
+        const pick = pickStrictFromPvsV46(fen, pvs, histCtx);
+        if (pick) acceptPick(pick, 5);
+      } catch (e) {}
+    })();
+
+    // Engine 2: Stockfish 18 NNUE (`chess-api.com`, d18)
+    (async () => {
+      try {
+        const body = { fen, depth: 18, maxThinkingTime: 100 };
+        if (histCtx.threefoldUcis.size > 0 && histCtx.nonRepeatingUcis.length > 0) {
+          body.searchmoves = histCtx.nonRepeatingUcis.join(' ');
+        }
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 3200);
+        const r = await fetch('https://chess-api.com/v1', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), signal: ctrl.signal
+        });
+        clearTimeout(tid);
+        if (!r.ok) return;
+        const d = await r.json();
+        const uci = d && (d.move || d.lan);
+        if (!uci) return;
+        const rawM = (d.mate !== null && d.mate !== undefined && d.mate !== '') ? Number(d.mate) : null;
+        const rawCp = (d.centipawns !== null && d.centipawns !== undefined && d.centipawns !== '') ? Number(d.centipawns) : Math.round((Number(d.eval) || 0) * 100);
+        const cont = Array.isArray(d.continuationArr) ? d.continuationArr : [];
+        const pick = pickStrictFromPvsV46(fen, [{
+          uci, pvTokens: cont[0] === uci ? cont : [uci, ...cont],
+          moverCp: isNaN(rawCp) ? 0 : rawCp * sign,
+          moverMate: (rawM && !isNaN(rawM)) ? rawM * sign : null,
+          depth: Number(d.depth) || 18
+        }], histCtx);
+        if (pick) acceptPick(pick, 4);
+      } catch (e) {}
+    })();
+
+    // Engine 3: Local Stockfish 10 MultiPV-4 (sees top 4 lines for strict Brilliant & Great!)
+    warmMogWorkerV46();
+    const runLocal = () => {
+      if (tok !== v46ReqTok || !v46SfWorker) return;
+      const pvMap = new Map();
+      let maxD = 0;
+      v46SfLineCb = (line) => {
+        if (tok !== v46ReqTok) return;
+        if (line.startsWith('info ') && line.includes(' pv ') && line.includes(' score ')) {
+          const dM = line.match(/\bdepth (\d+)/);
+          const mpM = line.match(/\bmultipv (\d+)/);
+          const scM = line.match(/\bscore (cp|mate) (-?\d+)/);
+          const pvM = line.match(/\bpv ([^\n]+)/);
+          if (!dM || !scM || !pvM) return;
+          const d = parseInt(dM[1], 10);
+          if (d < 8 || d < maxD) return;
+          if (d > maxD) { maxD = d; pvMap.clear(); }
+          const mp = mpM ? parseInt(mpM[1], 10) : 1;
+          const isM = scM[1] === 'mate';
+          const scV = parseInt(scM[2], 10);
+          const pvToks = pvM[1].trim().split(/\s+/);
+          if (!pvToks[0] || pvToks[0].length < 4) return;
+          pvMap.set(mp, { uci: pvToks[0], pvTokens: pvToks, moverCp: isM ? null : scV, moverMate: isM ? scV : null, depth: d });
+          if (pvMap.has(1) && (pvMap.size >= 2 || d >= 11)) {
+            const pick = pickStrictFromPvsV46(fen, Array.from(pvMap.values()), histCtx);
+            if (pick) acceptPick(pick, 2);
+          }
+        }
+      };
+      try {
+        v46SfWorker.postMessage('stop');
+        v46SfWorker.postMessage(histCtx.uciPosCmd);
+        v46SfWorker.postMessage('go depth 18');
+      } catch (e) {}
+    };
+
+    if (v46SfWorker) runLocal();
+    else {
+      let w = 0;
+      const wt = setInterval(() => {
+        w += 80;
+        if (tok !== v46ReqTok || w > 4000) { clearInterval(wt); return; }
+        if (v46SfWorker) { clearInterval(wt); runLocal(); }
+      }, 80);
+    }
+  }
+
+  // Capture-phase 'B' listener
+  window.addEventListener('keydown', (e) => {
+    if (!v46Unlocked) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+
+    const v38p = document.getElementById('v38VideoPanel');
+    const v37p = document.getElementById('v37VideoPanel');
+    const v36p = document.getElementById('v36FilmRoomPanel');
+    const vidOpen = Boolean(
+      (v38p && !v38p.classList.contains('hidden')) ||
+      (v37p && !v37p.classList.contains('hidden')) ||
+      (v36p && !v36p.classList.contains('hidden'))
+    );
+    if (vidOpen) return;
+
+    if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      runStrictMogEngineV46();
+    } else if (e.key === 'Escape' && v46ActiveDraw) {
+      clearStealthV46();
+    }
+  }, true);
+
+  const prevCommitV46 = window.commitMoveOnBoardInstant;
+  window.commitMoveOnBoardInstant = function(mvObj) {
+    if (v46ActiveDraw) clearStealthV46();
+    prevCommitV46(mvObj);
+  };
+
+  let lastFenV46 = '';
+  const prevRenderV46 = window.renderBoard;
+  window.renderBoard = function() {
+    prevRenderV46();
+    const cur = typeof game !== 'undefined' ? game.fen() : '';
+    if (cur !== lastFenV46) {
+      lastFenV46 = cur;
+      if (v46ActiveDraw) clearStealthV46();
+    } else if (v46ActiveDraw) {
+      renderStealthV46(v46ActiveDraw);
+    }
+  };
+
+  const prevActV46 = window.activateSidebarTab;
+  window.activateSidebarTab = function(tabName) {
+    clearStealthV46();
+    if (prevActV46) prevActV46(tabName);
+  };
+
+  window.addEventListener('resize', () => {
+    if (v46ActiveDraw) renderStealthV46(v46ActiveDraw);
+  });
+})();
+</script>
 </html>
