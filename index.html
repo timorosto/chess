@@ -49205,4 +49205,2020 @@
   })();
 })();
 </script>
+<!-- ===================================================================== -->
+<!-- 🔥 V44 CLIMB 2.0 MASTER REPAIR & 10x TACTICAL OVERHAUL                -->
+<!--    1. Moves Climb HUD ABOVE the board (ZERO pieces ever covered!)     -->
+<!--    2. Kills V43 duplicate right-click arrows (native arrows intact!)  -->
+<!--    3. Blocks mousedown/click leakage (ZERO resets or broken puzzles!) -->
+<!--    4. Multi-move Queen Sacs & Combos (White & Black) + Levels 1–15    -->
+<!--    Paste this right before </html> at the very bottom of index.html   -->
+<!-- ===================================================================== -->
+<script>
+(function applyClimbOverhaulAndFixV44() {
+  const STD_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  const SAVE_KEY_V44 = 'chess_pro_climb_v44';
+  const FILES = 'abcdefgh';
+
+  // -------------------------------------------------------------------------
+  // 1. KILL ALL BROKEN V43 OVERLAYS & DUPLICATE RIGHT-CLICK ARROWS FOREVER
+  // -------------------------------------------------------------------------
+  const killCss = document.createElement('style');
+  killCss.textContent = `
+    /* Permanently disable V43's board-covering HUD & duplicate right-click arrows */
+    #v43OnScreenHud,
+    #v43RightClickSvg,
+    #v43ClimbBoardSvg,
+    #v43CountdownOverlay,
+    #v43BoardToast {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+
+    body.v44-climb-live .move-badge-on-sq { display: none !important; }
+
+    /* V44 Board Graphics Layer (ONLY legal move dots & Blunder Dodger A/B arrows — NEVER right-click!) */
+    #v44ClimbSvg {
+      position: absolute;
+      z-index: 54;
+      pointer-events: none;
+      overflow: visible;
+      filter: drop-shadow(0 3px 4px rgba(0,0,0,0.52));
+    }
+    #v44ClimbSvg.hidden { display: none !important; }
+
+    /* PRACTICAL TOP BAR DOCKED OVER THE TOP PLAYER STRIP (0 PIXELS OVER BOARD!) */
+    #v44TopBar {
+      width: 100%;
+      box-sizing: border-box;
+      background: #1b1a17;
+      border: 1.5px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      padding: 6px 12px;
+      margin-bottom: 6px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+    #v44TopBar.hidden { display: none !important; }
+    #v44TopBar.is-freeze {
+      border-color: #38bdf8;
+      background: linear-gradient(90deg, #13232e 0%, #1b1a17 100%);
+      box-shadow: 0 0 18px rgba(56, 189, 248, 0.28);
+    }
+    #v44TopBar.is-danger {
+      border-color: #ef4444;
+      background: linear-gradient(90deg, #2d1414 0%, #1b1a17 100%);
+    }
+    #v44TopBarTrack {
+      width: 100%;
+      height: 5px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.1);
+      overflow: hidden;
+      margin-top: 5px;
+    }
+    #v44TopBarFill {
+      height: 100%;
+      width: 100%;
+      border-radius: 99px;
+      background: #81b64c;
+      transition: width 60ms linear, background-color 0.16s ease;
+    }
+
+    /* BOTTOM FEEDBACK TOAST DOCKED BELOW THE BOARD (NEVER COVERS RANK 1!) */
+    #v44BottomBanner {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      padding: 6px 12px;
+      border-radius: 10px;
+      background: #1f1e1b;
+      border: 1.5px solid #81b64c;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    #v44BottomBanner.hidden { display: none !important; }
+
+    /* CENTER 3-2-1-GO COUNTDOWN (ONLY BEFORE TIMED ROUNDS START, AUTO-HIDES!) */
+    #v44Countdown {
+      position: absolute;
+      inset: 0;
+      z-index: 80;
+      background: rgba(12, 11, 10, 0.68);
+      backdrop-filter: blur(3px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+    }
+    #v44Countdown.hidden { display: none !important; }
+    #v44CountdownNum {
+      font-size: 74px;
+      font-weight: 900;
+      line-height: 1;
+      color: #ffffff;
+      text-shadow: 0 6px 26px rgba(0,0,0,0.85), 0 0 24px rgba(129, 182, 76, 0.7);
+      animation: v44Pop 0.62s cubic-bezier(0.18, 0.89, 0.32, 1.35);
+    }
+    @keyframes v44Pop {
+      0%   { transform: scale(0.35); opacity: 0; }
+      55%  { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  `;
+  document.head.appendChild(killCss);
+
+  // -------------------------------------------------------------------------
+  // 2. SAVE STATE (MIGRATES ANY EXISTING V43 PROGRESS AUTOMATICALLY)
+  // -------------------------------------------------------------------------
+  let climbState = { completed: [], endlessBest: 0, freePlayUnlock: false };
+
+  function loadClimbV44() {
+    try {
+      const r44 = window.localStorage.getItem(SAVE_KEY_V44);
+      const r43 = window.localStorage.getItem('chess_pro_climb_v43');
+      const raw = r44 || r43;
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p && typeof p === 'object') {
+          climbState.completed = Array.isArray(p.completed) ? p.completed : [];
+          climbState.endlessBest = Number(p.endlessBest) || 0;
+          climbState.freePlayUnlock = Boolean(p.freePlayUnlock);
+        }
+      }
+    } catch (e) {}
+  }
+
+  function saveClimbV44() {
+    try { window.localStorage.setItem(SAVE_KEY_V44, JSON.stringify(climbState)); } catch (e) {}
+    try {
+      if (typeof userProfile !== 'undefined') {
+        userProfile.climbV44 = { ...climbState };
+        if (typeof window.saveAndRenderProfile === 'function') window.saveAndRenderProfile(0);
+      }
+    } catch (e) {}
+  }
+
+  function isCleared(n) { return climbState.completed.includes(n); }
+  function isUnlocked(n) {
+    if (n > 15) return false;
+    if (climbState.freePlayUnlock || n === 1) return true;
+    return isCleared(n - 1);
+  }
+  function markCleared(n, eloBonus = 15) {
+    if (!climbState.completed.includes(n)) {
+      climbState.completed.push(n);
+      climbState.completed.sort((a, b) => a - b);
+      if (typeof userProfile !== 'undefined') {
+        userProfile.xp = (userProfile.xp || 0) + 50;
+        userProfile.elo = (userProfile.elo || 0) + eloBonus;
+      }
+    }
+    saveClimbV44();
+  }
+  loadClimbV44();
+
+  // -------------------------------------------------------------------------
+  // 3. PRACTICAL OUTSIDE-THE-BOARD HUD & GRAPHICS HELPERS
+  // -------------------------------------------------------------------------
+  let hiddenTopPlayerBarEl = null;
+
+  function findBoardColumnContainer() {
+    const stage = document.getElementById('boardStageWrapper');
+    if (stage && stage.parentElement) return { stage, col: stage.parentElement };
+    if (boardEl && boardEl.parentElement && boardEl.parentElement.parentElement) {
+      return { stage: boardEl.parentElement, col: boardEl.parentElement.parentElement };
+    }
+    return null;
+  }
+
+  function ensureOutsideBoardBarsDom() {
+    const refs = findBoardColumnContainer();
+    if (!refs) return null;
+
+    let topBar = document.getElementById('v44TopBar');
+    if (!topBar) {
+      topBar = document.createElement('div');
+      topBar.id = 'v44TopBar';
+      topBar.className = 'hidden';
+      topBar.innerHTML = `
+        <div class="flex items-center justify-between gap-2 text-xs font-extrabold text-white">
+          <div id="v44BarLeft" class="truncate"></div>
+          <div id="v44BarRight" class="flex items-center gap-2.5 flex-shrink-0"></div>
+        </div>
+        <div id="v44BarSub" class="text-[11px] font-semibold text-[#c7c5c0] mt-0.5 truncate"></div>
+        <div id="v44TopBarTrack"><div id="v44TopBarFill"></div></div>
+      `;
+      refs.col.insertBefore(topBar, refs.stage);
+    }
+
+    let botBar = document.getElementById('v44BottomBanner');
+    if (!botBar) {
+      botBar = document.createElement('div');
+      botBar.id = 'v44BottomBanner';
+      botBar.className = 'hidden';
+      refs.col.insertBefore(botBar, refs.stage.nextSibling);
+    }
+
+    let cd = document.getElementById('v44Countdown');
+    if (!cd && boardEl && boardEl.parentElement) {
+      if (getComputedStyle(boardEl.parentElement).position === 'static') {
+        boardEl.parentElement.style.position = 'relative';
+      }
+      cd = document.createElement('div');
+      cd.id = 'v44Countdown';
+      cd.className = 'hidden';
+      cd.innerHTML = `
+        <div id="v44CdTitle" class="text-xs font-extrabold uppercase tracking-widest text-[#9ad165] mb-2"></div>
+        <div id="v44CountdownNum">3</div>
+        <div id="v44CdSub" class="text-xs font-bold text-[#e8e6e2] mt-3 px-4 text-center max-w-[320px]"></div>
+      `;
+      boardEl.parentElement.appendChild(cd);
+    }
+
+    return { topBar, botBar, cd };
+  }
+
+  function setTopBarV44(cfg) {
+    const dom = ensureOutsideBoardBarsDom();
+    if (!dom) return;
+
+    // Hide the Coach Magnus top player row cleanly while Climb bar is visible so the board doesn't even shift!
+    const topRate = document.getElementById('topPlayerRating');
+    const origTopRow = topRate ? (topRate.closest('div.flex.items-center.justify-between') || topRate.parentElement?.parentElement) : null;
+
+    if (!cfg) {
+      dom.topBar.classList.add('hidden');
+      if (hiddenTopPlayerBarEl) { hiddenTopPlayerBarEl.style.display = ''; hiddenTopPlayerBarEl = null; }
+      return;
+    }
+
+    if (origTopRow && origTopRow !== dom.topBar && origTopRow.parentElement === dom.topBar.parentElement) {
+      origTopRow.style.display = 'none';
+      hiddenTopPlayerBarEl = origTopRow;
+    }
+
+    dom.topBar.classList.remove('hidden', 'is-freeze', 'is-danger');
+    if (cfg.mode === 'freeze') dom.topBar.classList.add('is-freeze');
+    if (cfg.mode === 'danger') dom.topBar.classList.add('is-danger');
+
+    dom.topBar.querySelector('#v44BarLeft').innerHTML = cfg.left || '';
+    dom.topBar.querySelector('#v44BarRight').innerHTML = cfg.right || '';
+    const subEl = dom.topBar.querySelector('#v44BarSub');
+    subEl.innerHTML = cfg.sub || '';
+    subEl.classList.toggle('hidden', !cfg.sub);
+
+    const track = dom.topBar.querySelector('#v44TopBarTrack');
+    const fill = dom.topBar.querySelector('#v44TopBarFill');
+    if (typeof cfg.pct === 'number') {
+      track.classList.remove('hidden');
+      fill.style.width = `${Math.max(0, Math.min(100, cfg.pct))}%`;
+      fill.style.backgroundColor = cfg.barColor || '#81b64c';
+    } else {
+      track.classList.add('hidden');
+    }
+  }
+
+  let v44BannerT = null;
+  function flashBottomBannerV44(msg, borderColor = '#81b64c', ms = 1500) {
+    const dom = ensureOutsideBoardBarsDom();
+    if (!dom) return;
+    dom.botBar.textContent = msg;
+    dom.botBar.style.borderColor = borderColor;
+    dom.botBar.classList.remove('hidden');
+    if (v44BannerT) clearTimeout(v44BannerT);
+    v44BannerT = setTimeout(() => dom.botBar.classList.add('hidden'), ms);
+  }
+
+  let v44CdTimer = null;
+  function runCountdownV44(title, subtitle, onGo) {
+    const dom = ensureOutsideBoardBarsDom();
+    if (!dom || !dom.cd) { if (onGo) onGo(); return; }
+    if (v44CdTimer) { clearTimeout(v44CdTimer); v44CdTimer = null; }
+
+    const steps = ['3', '2', '1', 'GO!'];
+    let i = 0;
+    dom.cd.querySelector('#v44CdTitle').textContent = title || 'GET READY';
+    dom.cd.querySelector('#v44CdSub').textContent = subtitle || '';
+    dom.cd.classList.remove('hidden');
+    const num = dom.cd.querySelector('#v44CountdownNum');
+
+    const step = () => {
+      if (!v44Session) { dom.cd.classList.add('hidden'); return; }
+      const val = steps[i];
+      num.textContent = val;
+      num.style.color = val === 'GO!' ? '#81b64c' : '#ffffff';
+      num.style.animation = 'none';
+      void num.offsetWidth;
+      num.style.animation = 'v44Pop 0.6s cubic-bezier(0.18, 0.89, 0.32, 1.35)';
+      try { playChessSound(val === 'GO!' ? 'levelup' : 'move'); } catch (e) {}
+      i++;
+      if (i < steps.length) {
+        v44CdTimer = setTimeout(step, 620);
+      } else {
+        v44CdTimer = setTimeout(() => {
+          dom.cd.classList.add('hidden');
+          if (v44Session && onGo) onGo();
+        }, 420);
+      }
+    };
+    step();
+  }
+
+  function sqToPt800(sq) {
+    if (!sq || sq.length < 2) return null;
+    const f = FILES.indexOf(sq[0]), r = parseInt(sq[1], 10);
+    if (f < 0 || isNaN(r)) return null;
+    const col = boardFlipped ? (7 - f) : f;
+    const row = boardFlipped ? (r - 1) : (8 - r);
+    return { x: col * 100 + 50, y: row * 100 + 50, col, row };
+  }
+
+  function xyToSqV44(clientX, clientY) {
+    if (!boardEl) return null;
+    const rect = boardEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = clientX - rect.left, y = clientY - rect.top;
+    if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
+    const col = Math.min(7, Math.max(0, Math.floor((x / rect.width) * 8)));
+    const row = Math.min(7, Math.max(0, Math.floor((y / rect.height) * 8)));
+    const f = boardFlipped ? (7 - col) : col;
+    const r = boardFlipped ? (row + 1) : (8 - row);
+    return FILES[f] + r;
+  }
+
+  function polyArrowV44(x1, y1, x2, y2, sw = 10, hw = 22) {
+    const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy);
+    if (L < 22) return '';
+    const ux = dx / L, uy = dy / L, px = -uy, py = ux;
+    const so = Math.min(18, L * 0.16), to = Math.min(14, L * 0.12);
+    const hl = Math.min(35, Math.max(21, Math.max(24, L - so - to) * 0.44));
+    const sx = x1 + ux * so, sy = y1 + uy * so;
+    const tx = x2 - ux * to, ty = y2 - uy * to;
+    const bx = tx - ux * hl, by = ty - uy * hl;
+    return [
+      [sx + px * sw, sy + py * sw], [bx + px * sw, by + py * sw],
+      [bx + px * hw, by + py * hw], [tx, ty],
+      [bx - px * hw, by - py * hw], [bx - px * sw, by - py * sw],
+      [sx - px * sw, sy - py * sw]
+    ].map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  }
+
+  function renderClimbSvgV44() {
+    if (!boardEl || !boardEl.parentElement) return;
+    let svg = document.getElementById('v44ClimbSvg');
+    if (!svg) {
+      if (getComputedStyle(boardEl.parentElement).position === 'static') boardEl.parentElement.style.position = 'relative';
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = 'v44ClimbSvg';
+      svg.setAttribute('viewBox', '0 0 800 800');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.classList.add('hidden');
+      boardEl.parentElement.appendChild(svg);
+    }
+    svg.style.left   = `${boardEl.offsetLeft}px`;
+    svg.style.top    = `${boardEl.offsetTop}px`;
+    svg.style.width  = `${boardEl.offsetWidth}px`;
+    svg.style.height = `${boardEl.offsetHeight}px`;
+
+    if (!v44Session) {
+      svg.innerHTML = '';
+      svg.classList.add('hidden');
+      return;
+    }
+
+    const s = v44Session;
+    let out = '';
+
+    if (s.lastMove && s.lastMove.from && s.lastMove.to) {
+      [s.lastMove.from, s.lastMove.to].forEach(sq => {
+        const pt = sqToPt800(sq);
+        if (pt) out += `<rect x="${pt.col * 100}" y="${pt.row * 100}" width="100" height="100" fill="#f7c045" fill-opacity="0.28" />`;
+      });
+    }
+
+    if (s.selectedSq && s.chess) {
+      const sp = sqToPt800(s.selectedSq);
+      if (sp) out += `<rect x="${sp.col * 100}" y="${sp.row * 100}" width="100" height="100" fill="#81b64c" fill-opacity="0.38" />`;
+      s.chess.moves({ square: s.selectedSq, verbose: true }).forEach(m => {
+        const tp = sqToPt800(m.to);
+        if (!tp) return;
+        out += m.captured
+          ? `<circle cx="${tp.x}" cy="${tp.y}" r="43" fill="none" stroke="rgba(20,20,18,0.45)" stroke-width="8" />`
+          : `<circle cx="${tp.x}" cy="${tp.y}" r="15" fill="rgba(20,20,18,0.34)" />`;
+      });
+    }
+
+    const COLS = { blue: '#32b8e6', purple: '#a855f7', red: '#ef4444', green: '#81b64c', gold: '#f7c045', cyan: '#24d1c6' };
+    (s.arrows || []).forEach(ar => {
+      const p1 = sqToPt800(ar.from), p2 = sqToPt800(ar.to);
+      if (!p1 || !p2) return;
+      const col = COLS[ar.color] || COLS.green;
+      const pts = polyArrowV44(p1.x, p1.y, p2.x, p2.y, 10, 22.5);
+      if (pts) out += `<polygon points="${pts}" fill="${col}" fill-opacity="0.92" stroke="rgba(16,15,13,0.6)" stroke-width="2" stroke-linejoin="round" />`;
+      if (ar.label) {
+        const lx = p2.col * 100 + 82, ly = p2.row * 100 + 18;
+        out += `<circle cx="${lx}" cy="${ly}" r="15" fill="${col}" stroke="#141311" stroke-width="2.5" />`;
+        out += `<text x="${lx}" y="${ly + 5}" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="900" font-family="Inter, sans-serif">${ar.label}</text>`;
+      }
+    });
+
+    svg.innerHTML = out;
+    svg.classList.remove('hidden');
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. DEDICATED TACTICAL BOT WORKER (FOR BOSSES, FINISH HIM! & ESCAPE ARTIST)
+  // -------------------------------------------------------------------------
+  const botWorkerSrcV44 = `
+    const VAL=[0,100,320,330,500,900,20000];
+    const NO=[-33,-31,-18,-14,14,18,31,33], BO=[-17,-15,15,17], RO=[-16,-1,1,16], KO=[-17,-16,-15,-1,1,15,16,17];
+    const F='abcdefgh';
+    let b=new Int8Array(128),t=0,ca=0,ep=-1,ks=[0x74,0x04],nd=0,dl=0,abrt=false,pl=0;
+    const uC=new Int8Array(128),uCa=new Int8Array(128),uE=new Int16Array(128),uW=new Int16Array(128),uB=new Int16Array(128);
+    function lf(fen){
+      b.fill(0); ks[0]=-1; ks[1]=-1;
+      const p=fen.trim().split(/\\s+/), rs=p[0].split('/');
+      for(let r=0;r<8;r++){let c=0;for(let i=0;i<rs[r].length;i++){const ch=rs[r][i];if(ch>='1'&&ch<='8')c+=ch.charCodeAt(0)-48;else{const sq=(r<<4)|c,isB=ch>='a',lo=ch.toLowerCase();const tp=lo==='p'?1:lo==='n'?2:lo==='b'?3:lo==='r'?4:lo==='q'?5:6;b[sq]=isB?(tp|8):tp;if(tp===6)ks[isB?1:0]=sq;c++;}}}
+      t=p[1]==='b'?8:0; ca=0; const cs=p[2]||'-';
+      if(cs.includes('K'))ca|=1;if(cs.includes('Q'))ca|=2;if(cs.includes('k'))ca|=4;if(cs.includes('q'))ca|=8;
+      ep=(p[3]&&p[3]!=='-'&&p[3].length===2)?(((8-parseInt(p[3][1],10))<<4)|(p[3].charCodeAt(0)-97)):-1; pl=0;
+    }
+    function atk(sq,by){
+      if(by===0){if(!((sq+15)&0x88)&&b[sq+15]===1)return true;if(!((sq+17)&0x88)&&b[sq+17]===1)return true;}
+      else{if(!((sq-15)&0x88)&&b[sq-15]===9)return true;if(!((sq-17)&0x88)&&b[sq-17]===9)return true;}
+      for(let i=0;i<8;i++){const s=sq+NO[i];if(!(s&0x88)&&b[s]===(by|2))return true;}
+      for(let i=0;i<8;i++){const s=sq+KO[i];if(!(s&0x88)&&b[s]===(by|6))return true;}
+      for(let i=0;i<4;i++){let s=sq+BO[i];while(!(s&0x88)){const p=b[s];if(p){if(p===(by|3)||p===(by|5))return true;break;}s+=BO[i];}}
+      for(let i=0;i<4;i++){let s=sq+RO[i];while(!(s&0x88)){const p=b[s];if(p){if(p===(by|4)||p===(by|5))return true;break;}s+=RO[i];}}
+      return false;
+    }
+    function gen(caps){
+      const l=[],us=t,th=us^8;
+      for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+        const sq=(r<<4)|c,p=b[sq];if(!p||(p&8)!==us)continue;const tp=p&7;
+        if(tp===1){
+          const d=us===0?-16:16,sr=us===0?6:1,pr=us===0?0:7;
+          for(let k=0;k<2;k++){const cs=sq+(us===0?(k?-15:-17):(k?17:15));if(cs&0x88)continue;const q=b[cs];if(q&&(q&8)===th)l.push(sq|(cs<<8)|((cs>>4)===pr?(5<<16):0)|(1<<20));else if(cs===ep)l.push(sq|(cs<<8)|(3<<20));}
+          const o=sq+d;if(!(o&0x88)&&!b[o]){if((o>>4)===pr)l.push(sq|(o<<8)|(5<<16));else if(!caps){l.push(sq|(o<<8));if(r===sr&&!b[o+d])l.push(sq|((o+d)<<8)|(8<<20));}}
+        }else if(tp===2||tp===6){
+          const offs=tp===2?NO:KO;
+          for(let i=0;i<8;i++){const to=sq+offs[i];if(to&0x88)continue;const q=b[to];if(!q){if(!caps)l.push(sq|(to<<8));}else if((q&8)===th)l.push(sq|(to<<8)|(1<<20));}
+          if(tp===6&&!caps){
+            if(us===0&&sq===0x74){if((ca&1)&&!b[0x75]&&!b[0x76]&&!atk(0x74,8)&&!atk(0x75,8)&&!atk(0x76,8))l.push(0x74|(0x76<<8)|(4<<20));if((ca&2)&&!b[0x73]&&!b[0x72]&&!b[0x71]&&!atk(0x74,8)&&!atk(0x73,8)&&!atk(0x72,8))l.push(0x74|(0x72<<8)|(4<<20));}
+            else if(us===8&&sq===0x04){if((ca&4)&&!b[0x05]&&!b[0x06]&&!atk(0x04,0)&&!atk(0x05,0)&&!atk(0x06,0))l.push(0x04|(0x06<<8)|(4<<20));if((ca&8)&&!b[0x03]&&!b[0x02]&&!b[0x01]&&!atk(0x04,0)&&!atk(0x03,0)&&!atk(0x02,0))l.push(0x04|(0x02<<8)|(4<<20));}
+          }
+        }else{
+          const offs=tp===3?BO:(tp===4?RO:KO);
+          for(let i=0;i<offs.length;i++){let to=sq+offs[i];while(!(to&0x88)){const q=b[to];if(!q){if(!caps)l.push(sq|(to<<8));}else{if((q&8)===th)l.push(sq|(to<<8)|(1<<20));break;}to+=offs[i];}}
+        }
+      }
+      return l;
+    }
+    function mk(mv){
+      const f=mv&0xFF,to=(mv>>8)&0xFF,pr=(mv>>16)&0x0F,fl=(mv>>20)&0x0F,p=b[f],us=t;
+      uC[pl]=b[to];uCa[pl]=ca;uE[pl]=ep;uW[pl]=ks[0];uB[pl]=ks[1];
+      b[to]=pr?(us|pr):p;b[f]=0;
+      if(fl&2){const cs=us===0?to+16:to-16;uC[pl]=b[cs];b[cs]=0;}
+      else if(fl&4){if(to===0x76){b[0x75]=b[0x77];b[0x77]=0;}else if(to===0x72){b[0x73]=b[0x70];b[0x70]=0;}else if(to===0x06){b[0x05]=b[0x07];b[0x07]=0;}else if(to===0x02){b[0x03]=b[0x00];b[0x00]=0;}}
+      if((p&7)===6)ks[us===0?0:1]=to;
+      ep=(fl&8)?(us===0?f-16:f+16):-1;
+      if(f===0x74||to===0x74)ca&=~3;if(f===0x77||to===0x77)ca&=~1;if(f===0x70||to===0x70)ca&=~2;
+      if(f===0x04||to===0x04)ca&=~12;if(f===0x07||to===0x07)ca&=~4;if(f===0x00||to===0x00)ca&=~8;
+      t^=8;pl++;
+      const mkK=ks[us===0?0:1];if(mkK>=0&&atk(mkK,t)){unmk(mv);return false;}
+      return true;
+    }
+    function unmk(mv){
+      pl--;t^=8;const us=t,f=mv&0xFF,to=(mv>>8)&0xFF,pr=(mv>>16)&0x0F,fl=(mv>>20)&0x0F;
+      ca=uCa[pl];ep=uE[pl];ks[0]=uW[pl];ks[1]=uB[pl];
+      b[f]=pr?(us|1):b[to];
+      if(fl&2){b[to]=0;b[us===0?to+16:to-16]=uC[pl];}
+      else{b[to]=uC[pl];if(fl&4){if(to===0x76){b[0x77]=b[0x75];b[0x75]=0;}else if(to===0x72){b[0x70]=b[0x73];b[0x73]=0;}else if(to===0x06){b[0x07]=b[0x05];b[0x05]=0;}else if(to===0x02){b[0x00]=b[0x03];b[0x03]=0;}}}
+    }
+    function ev(){
+      let w=0,pcs=0;
+      for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+        const p=b[(r<<4)|c];if(!p)continue;pcs++;
+        const tp=p&7,isB=(p&8)!==0;let v=VAL[tp];
+        if(tp===1)v+=(isB?(r-1):(6-r))*10+((c===3||c===4)&&(r===3||r===4)?18:0);
+        else if(tp===2||tp===3)v+=(r>=2&&r<=5&&c>=2&&c<=5)?16:0;
+        else if(tp===6&&pcs<=6)v-=(Math.abs(3.5-r)+Math.abs(3.5-c))*12;
+        w+=isB?-v:v;
+      }
+      return t===0?w:-w;
+    }
+    function qs(a,bt,qd){
+      nd++;if((nd&1023)===0&&Date.now()>=dl){abrt=true;return 0;}
+      const sp=ev();if(sp>=bt)return bt;if(sp>a)a=sp;if(qd<=0)return a;
+      const ms=gen(true);ms.sort((x,y)=>(VAL[b[(y>>8)&0xFF]&7]||0)-(VAL[b[(x>>8)&0xFF]&7]||0));
+      for(let i=0;i<ms.length;i++){if(!mk(ms[i]))continue;const s=-qs(-bt,-a,qd-1);unmk(ms[i]);if(abrt)return 0;if(s>=bt)return bt;if(s>a)a=s;}
+      return a;
+    }
+    function ab(d,a,bt){
+      nd++;if((nd&1023)===0&&Date.now()>=dl){abrt=true;return 0;}
+      const inC=ks[t===0?0:1]>=0&&atk(ks[t===0?0:1],t^8);
+      if(d<=0){if(!inC)return qs(a,bt,4);d=1;}
+      const ms=gen(false);ms.sort((x,y)=>(VAL[b[(y>>8)&0xFF]&7]||0)-(VAL[b[(x>>8)&0xFF]&7]||0));
+      let leg=0,best=-999999;
+      for(let i=0;i<ms.length;i++){if(!mk(ms[i]))continue;leg++;const s=-ab(d-1,-bt,-a);unmk(ms[i]);if(abrt)return 0;if(s>best)best=s;if(s>a)a=s;if(a>=bt)break;}
+      if(leg===0)return inC?(-90000+pl*50):0;
+      return best;
+    }
+    function toO(mv){const pm={2:'n',3:'b',4:'r',5:'q'};return{from:F[mv&7]+(8-((mv&0xFF)>>4)),to:F[(mv>>8)&7]+(8-(((mv>>8)&0xFF)>>4)),promotion:pm[(mv>>16)&0x0F]||undefined};}
+    self.onmessage=function(e){
+      const m=e.data;if(!m||m.type!=='BOT')return;
+      lf(m.fen);const ps=gen(false),legs=[];
+      for(let i=0;i<ps.length;i++){if(mk(ps[i])){legs.push(ps[i]);unmk(ps[i]);}}
+      if(!legs.length){self.postMessage({reqId:m.reqId,move:null});return;}
+      dl=Date.now()+(m.elo>=1400?320:180);nd=0;abrt=false;
+      const maxD=m.elo>=1500?4:(m.elo>=1000?3:2);
+      let res=legs.map(mv=>({mv,sc:0}));
+      for(let d=1;d<=maxD;d++){
+        const cur=[];
+        for(let i=0;i<res.length;i++){mk(res[i].mv);const s=-ab(d-1,-999999,999999);unmk(res[i].mv);if(abrt)break;cur.push({mv:res[i].mv,sc:s});}
+        if(abrt)break;cur.sort((x,y)=>y.sc-x.sc);res=cur;if(Math.abs(res[0].sc)>85000)break;
+      }
+      let pick=res[0];
+      if(m.elo<=650&&res.length>1){
+        const r=Math.random(),pool=res.slice(0,Math.min(6,res.length));
+        if(r<0.42)pick=pool[Math.floor(Math.random()*Math.min(3,pool.length))];
+        else if(r<0.68)pick=pool[Math.floor(Math.random()*pool.length)];
+      }else if(m.elo<=1050&&res.length>1){
+        const good=res.filter(x=>x.sc>=res[0].sc-140).slice(0,3);
+        if(Math.random()<0.3&&good.length>1)pick=good[Math.floor(Math.random()*good.length)];
+      }
+      self.postMessage({reqId:m.reqId,move:toO(pick.mv)});
+    };
+  `;
+
+  let v44BotWorker = null;
+  try {
+    v44BotWorker = new Worker(URL.createObjectURL(new Blob([botWorkerSrcV44], { type: 'application/javascript' })));
+  } catch (e) {}
+
+  // -------------------------------------------------------------------------
+  // 5. 10x BETTER REAL MULTI-MOVE DECKS (WHITE & BLACK, FULL-BOARD TACTICS!)
+  // -------------------------------------------------------------------------
+  // Every combo has `line: [player1, opp1, player2, (opp2, player3)]` — verified at runtime by chess.js!
+  const MULTI_MOVE_COMBOS_T1 = [
+    {
+      title: "Morphy's Opera Queen Sac (2 Moves)",
+      fen: '4kb1r/p2n1ppp/4q3/4p1B1/4P3/1Q6/PPP2PPP/2KR4 w k - 0 1',
+      line: ['b3b8', 'd7b8', 'd1d8'],
+      hint: 'Sacrifice your Queen on b8 to deflect the Knight, then slam the Rook down!'
+    },
+    {
+      title: "Boden's Criss-Cross Queen Sac (2 Moves)",
+      fen: '2kr1b1r/pp1npppp/2p5/8/5B2/2QB4/PPP2PPP/R5K1 w - - 0 1',
+      line: ['c3c6', 'b7c6', 'd3a6'],
+      hint: 'Sacrifice the Queen on c6 to rip open the a6-c8 diagonal for your Bishop!'
+    },
+    {
+      title: 'Pinned-Rook Queen Sacrifice (2 Moves)',
+      fen: '5rk1/5ppp/8/7Q/2B5/8/5PPP/3R2K1 w - - 0 1',
+      line: ['h5f7', 'f8f7', 'd1d8'],
+      hint: 'Take f7 with your Queen! Their Rook gets pinned to their King by your c4 Bishop!'
+    },
+    {
+      title: 'Black Back-Rank Queen Sac (2 Moves)',
+      fen: '4r1k1/p4ppp/1p6/8/8/8/PP2qPPP/2R1R1K1 b - - 0 1',
+      line: ['e2e1', 'c1e1', 'e8e1'],
+      hint: 'Sacrifice your Queen on e1 to drag away their back-rank defender!'
+    },
+    {
+      title: 'Black Pinned-Rook Sac (2 Moves)',
+      fen: '3r2k1/5ppp/8/2b5/7q/8/5PPP/5RK1 b - - 0 1',
+      line: ['h4f2', 'f1f2', 'd8d1'],
+      hint: 'Your c5 Bishop aims straight at g1—sacrifice the Queen on f2 to pin their Rook!'
+    },
+    {
+      title: 'Battery Queen Breakthrough (2 Moves)',
+      fen: '2r1r1k1/p4ppp/1p6/8/8/8/PPP1QPPP/4R1K1 w - - 0 1',
+      line: ['e2e8', 'c8e8', 'e1e8'],
+      hint: 'Crash through the back rank with your Queen first!'
+    }
+  ];
+
+  const MULTI_MOVE_COMBOS_T2 = [
+    {
+      title: "Anastasia's Queen Sac Mate (3 Moves)",
+      fen: 'r4rk1/pbp2ppp/2p5/3N3Q/8/4R3/PPP2PPP/6K1 w - - 0 1',
+      line: ['d5e7', 'g8h8', 'h5h7', 'h8h7', 'e3h3'],
+      hint: 'Jump Ne7+ to trap their King in the corner, sacrifice Qxh7+, then swing the Rook to h3!'
+    },
+    {
+      title: 'Philidor Smothered Mate (3 Moves)',
+      fen: 'r4rk1/ppp2Npp/8/8/3q4/1Q6/PP3PPP/4R1K1 w - - 0 1',
+      line: ['f7h6', 'g8h8', 'b3g8', 'f8g8', 'h6f7'],
+      hint: 'Double check with Nh6+, sacrifice your Queen on g8 so their Rook traps their own King, then Nf7#!'
+    },
+    {
+      title: "Légal's Queen Sacrifice (3 Moves)",
+      fen: 'r2qkbnr/ppp2ppp/2np4/4p3/2B1P1b1/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 0 5',
+      line: ['f3e5', 'g4d1', 'c4f7', 'e8e7', 'c3d5'],
+      hint: 'Ignore the pin and play Nxe5! If they take your Queen, Bxf7+ and Nd5# is checkmate!'
+    },
+    {
+      title: "Réti's Double-Check Queen Sac (3 Moves)",
+      fen: 'rn2kb1r/pp3ppp/1qp5/8/3Q4/4B3/PPP2PPP/2KR4 w kq - 0 1',
+      line: ['d4d8', 'e8d8', 'e3g5', 'd8e8', 'd1d8'],
+      hint: 'Sacrifice the Queen on d8, then unleash double-check with Bg5+!'
+    },
+    {
+      title: "Black's Smothered Mate (3 Moves)",
+      fen: '4r1k1/pp3ppp/1q6/3Q4/8/8/PPP2nPP/R4RK1 b - - 0 1',
+      line: ['f2h3', 'g1h1', 'b6g1', 'f1g1', 'h3f2'],
+      hint: 'Double-check with Nh3+, sacrifice Qg1+, then deliver smothered mate with Nf2#!'
+    },
+    {
+      title: "Black's Queen Sac + Sniper Mate (3 Moves)",
+      fen: '6k1/pbp2p1p/3r4/8/5p1q/8/PPP2P1P/R4RK1 b - - 0 1',
+      line: ['h4h2', 'g1h2', 'd6h6', 'h2g1', 'h6h1'],
+      hint: 'Sacrifice Qxh2+ to drag their King out, lift Rh6+, then slam Rh1# backed by your b7 Bishop!'
+    }
+  ];
+
+  // 20 Full-Board Blunder Dodger Positions (BOTH White AND Black!)
+  const DODGER_DECK_V44 = [
+    // Tier 1
+    { tier: 1, fen: 'r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4', safe: ['e1','g1'], blunder: ['f3','e5'], punish: ['c6','e5'], why: 'e5 was guarded by their c6 Knight—Nxe5 lost your Knight!' },
+    { tier: 1, fen: 'r1bqkbnr/pppp1ppp/2n5/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 3 3', safe: ['g7','g6'], blunder: ['g8','f6'], punish: ['h5','f7'], why: 'Nf6 ignored f7—Qxf7# was instant Scholar’s Checkmate!' },
+    { tier: 1, fen: 'rnb1kbnr/pppp1ppp/8/4p3/4P2q/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3', safe: ['f3','h4'], blunder: ['g2','g3'], punish: ['h4','e4'], why: 'g3 missed the free Queen AND allowed Qxe4+ forking your King & Rook!' },
+    { tier: 1, fen: 'rnbqkbnr/pppp1ppp/8/4p2Q/4P3/8/PPPP1PPP/RNB1KBNR b KQkq - 1 2', safe: ['b8','c6'], blunder: ['g7','g6'], punish: ['h5','e5'], why: 'Kicking the Queen with g6 left e5 undefended—Qxe5+ forked King & Rook!' },
+    { tier: 1, fen: '3r2k1/5ppp/2p5/8/8/8/R1Q2PPP/6K1 w - - 0 1', safe: ['h2','h3'], blunder: ['c2','c6'], punish: ['d8','d1'], why: 'Grabbing c6 left your back rank wide open to Rd1# Checkmate!' },
+    { tier: 1, fen: '2r3k1/5ppp/8/8/8/2P5/PP3PPP/4R1K1 b - - 0 24', safe: ['g7','g6'], blunder: ['c8','c3'], punish: ['e1','e8'], why: 'Rxc3 got greedy for a pawn and abandoned the 8th rank to Re8#!' },
+    { tier: 1, fen: 'r1bqk1nr/ppp2pbp/2n3p1/4p3/4P3/2N2N2/P1PP1PPP/R1BQKB1R w KQkq - 0 6', safe: ['f1','c4'], blunder: ['f3','e5'], punish: ['g7','e5'], why: 'Their g7 sniper Bishop was aiming straight through the center at e5!' },
+    { tier: 1, fen: 'r1b1k1nr/pppp1ppp/2n5/2b1p3/2B1P2q/2NP4/PPP2PPP/R1BQK1NR w KQkq - 2 5', safe: ['d1','e2'], blunder: ['g1','f3'], punish: ['h4','f2'], why: 'Attacking their Queen ignored f2—Qxf2# was Checkmate!' },
+    { tier: 1, fen: 'r1b1k2r/ppp2ppp/2n5/1B1q4/3P4/2N2N2/PPP2PPP/R2Q1RK1 b kq - 0 9', safe: ['d5','d6'], blunder: ['c8','g4'], punish: ['c3','d5'], why: 'Bg4 completely forgot that Nc3 was already attacking your Queen!' },
+    { tier: 1, fen: 'r1bqk2r/ppp2ppp/3p1n2/2b1p3/1nB1P3/3P1NQ1/PPP2PPP/RNB1K2R w KQkq - 3 6', safe: ['b1','a3'], blunder: ['a2','a3'], punish: ['b4','c2'], why: 'a3 didn’t stop Nxc2+—their Knight forked your King and a1 Rook!' },
+    // Tier 2
+    { tier: 2, fen: 'r1b1k2r/ppp2ppp/2n5/q2p4/1bBPn3/2N2N2/PPP2PPP/R1BQK2R w KQkq - 3 7', safe: ['e1','g1'], blunder: ['c4','d5'], punish: ['a5','d5'], why: 'Your c3 Knight was PINNED by their b4 Bishop—it couldn’t recapture Qxd5!' },
+    { tier: 2, fen: '4r1k1/ppp2ppp/2n5/8/8/2P5/PP2QPPP/R3K2R w KQ - 0 14', safe: ['e1','g1'], blunder: ['a1','d1'], punish: ['e8','e2'], why: 'Your Queen was pinned on the e-file—Rxe2+ won your Queen for a Rook!' },
+    { tier: 2, fen: 'r1b1k2r/pp3ppp/2n1pn2/qB1p4/3P4/2N2N2/PPP2PPP/R1BQ1RK1 w kq - 2 9', safe: ['c1','d2'], blunder: ['c3','d5'], punish: ['a5','b5'], why: 'Your c3 Knight was the ONLY piece defending your b5 Bishop!' },
+    { tier: 2, fen: 'r4rk1/ppp2ppp/2n5/6q1/8/2P2N1b/PP3PPP/R2Q1RK1 w - - 2 13', safe: ['f3','g5'], blunder: ['g2','g3'], punish: ['h3','f1'], why: 'You could have taken their Queen on g5! Playing g3 dropped your Rook instead.' },
+    { tier: 2, fen: 'r1b2rk1/ppp2ppp/2nb4/7q/3P4/3B1N2/PPP2PPP/R2Q1RK1 w - - 2 11', safe: ['h2','h3'], blunder: ['f3','g5'], punish: ['h5','h2'], why: 'Your f3 Knight was the ONLY guard of h2—moving it allowed Qxh2#!' },
+    { tier: 2, fen: '4r1k1/5ppp/8/8/3n4/2Q5/5PPP/4R1K1 w - - 0 26', safe: ['e1','e8'], blunder: ['c3','d4'], punish: ['e8','e1'], why: 'Greedy Queen grab! Qxd4 dropped your back-rank guard and got mated by Rxe1#!' },
+    { tier: 2, fen: 'r3k2r/ppp2ppp/b1n5/8/2B5/2N5/PPP2PPP/R2Q1RK1 w kq - 1 10', safe: ['c4','a6'], blunder: ['c4','b3'], punish: ['a6','f1'], why: 'Retreating your Bishop let their a6 Bishop snipe your f1 Rook!' },
+    { tier: 2, fen: 'r1b2rk1/ppp2ppp/2n5/2b1p3/3QP3/2N2N2/PPP2PPP/R1B2RK1 w - - 0 8', safe: ['d4','c5'], blunder: ['f3','e5'], punish: ['c6','d4'], why: 'Your Queen on d4 was already attacked—Nxe5 lost your Queen to Nxd4!' },
+    { tier: 2, fen: 'r1bqkb1r/pppp1ppp/2n2n2/4p1N1/2B1P3/8/PPPP1PPP/RNBQK2R b KQkq - 5 4', safe: ['d7','d5'], blunder: ['h7','h6'], punish: ['g5','f7'], why: 'h6 walked straight into Nxf7 forking your Queen and Rook!' },
+    { tier: 2, fen: 'r1b1k2r/ppp2ppp/2n2q2/3N4/8/8/PPP2PPP/R1BQ1RK1 b kq - 1 9', safe: ['f6','d8'], blunder: ['f6','e5'], punish: ['f1','e1'], why: 'Qe5 lined your Queen straight up in front of your uncastled King—Re1 pins & wins it!' }
+  ];
+
+  // Crime Scene Cases (Realistic clips -> pick the blunder -> execute the punishment!)
+  const CRIME_DECK_V44 = [
+    {
+      title: 'Case #1: Wayward Queen Fork',
+      startFen: STD_FEN,
+      clip: [
+        { from: 'e2', to: 'e4', san: 'e4', who: 'White' },
+        { from: 'e7', to: 'e5', san: 'e5', who: 'Black' },
+        { from: 'd1', to: 'h5', san: 'Qh5', who: 'White' },
+        { from: 'g7', to: 'g6', san: 'g6', who: 'Black' }
+      ],
+      blunderIdx: 3,
+      punish: ['h5', 'e5'],
+      explain: 'g6 abandoned the e5 pawn—Qxe5+ forks King & Rook!'
+    },
+    {
+      title: 'Case #2: Fried Liver Blunder',
+      startFen: 'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3',
+      clip: [
+        { from: 'g8', to: 'f6', san: 'Nf6', who: 'Black' },
+        { from: 'f3', to: 'g5', san: 'Ng5', who: 'White' },
+        { from: 'h7', to: 'h6', san: 'h6', who: 'Black' }
+      ],
+      blunderIdx: 2,
+      punish: ['g5', 'f7'],
+      explain: 'h6 ignored f7 (needed d5!)—Nxf7 forks their Queen and Rook!'
+    },
+    {
+      title: 'Case #3: Back-Rank Greed',
+      startFen: '2r3k1/5ppp/8/8/8/2P5/PP3PPP/4R1K1 w - - 0 23',
+      clip: [
+        { from: 'h2', to: 'h3', san: 'h3', who: 'White' },
+        { from: 'c8', to: 'c3', san: 'Rxc3', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: ['e1', 'e8'],
+      explain: 'Rxc3 abandoned the 8th rank—Re8# is instant Checkmate!'
+    },
+    {
+      title: 'Case #4: Queen Tunnel Vision',
+      startFen: 'r1b1k2r/ppp2ppp/2n2n2/3q4/3P4/5N2/PPP2PPP/RNBQKB1R w KQkq - 0 6',
+      clip: [
+        { from: 'b1', to: 'c3', san: 'Nc3', who: 'White' },
+        { from: 'c8', to: 'g4', san: 'Bg4', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: ['c3', 'd5'],
+      explain: 'Bg4 ignored Nc3 attacking their Queen—Nxd5 wins it cleanly!'
+    },
+    {
+      title: 'Case #5: Walking Into the e-File Pin',
+      startFen: 'r1b1k2r/ppp2ppp/2n2q2/8/8/2N5/PPP2PPP/R1BQ1RK1 w kq - 0 9',
+      clip: [
+        { from: 'c3', to: 'd5', san: 'Nd5', who: 'White' },
+        { from: 'f6', to: 'e5', san: 'Qe5', who: 'Black' }
+      ],
+      blunderIdx: 1,
+      punish: ['f1', 'e1'],
+      explain: 'Qe5 stepped directly in front of their uncastled King—Re1 pins & wins the Queen!'
+    }
+  ];
+
+  // Opening Survival Decks (White 1.e4 + Black Repertoire!)
+  const OPENING_WHITE_E4 = [
+    { name: 'Italian Game (1...e5)', color: 'w', steps: [
+      { accept: ['e4'], cue: 'Take the center with 1. e4!', bot: 'e5' },
+      { accept: ['Nf3'], cue: 'Develop Knight & hit e5!', bot: 'Nc6' },
+      { accept: ['Bc4'], cue: 'Target weak f7 with Bc4!', bot: 'Bc5' },
+      { accept: ['O-O', 'c3', 'd3', 'Nc3'], cue: 'Castle or support the center!', bot: null }
+    ]},
+    { name: 'Sicilian Defense (1...c5)', color: 'w', steps: [
+      { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'c5' },
+      { accept: ['Nf3'], cue: 'Develop Knight & prep d4!', bot: 'd6' },
+      { accept: ['d4'], cue: 'Open the center right now with d4!', bot: 'cxd4' },
+      { accept: ['Nxd4'], cue: 'Recapture in the center!', bot: null }
+    ]},
+    { name: 'French Defense (1...e6)', color: 'w', steps: [
+      { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'e6' },
+      { accept: ['d4'], cue: 'Claim the full two-pawn center!', bot: 'd5' },
+      { accept: ['Nc3', 'Nd2', 'e5'], cue: 'Defend e4 or push e5 for space!', bot: 'Nf6' },
+      { accept: ['Bg5', 'e5', 'exd5'], cue: 'Pin with Bg5 or advance!', bot: null }
+    ]},
+    { name: 'Caro-Kann Defense (1...c6)', color: 'w', steps: [
+      { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'c6' },
+      { accept: ['d4'], cue: 'Grab the full center with d4!', bot: 'd5' },
+      { accept: ['Nc3'], cue: 'Protect e4 & develop!', bot: 'dxe4' },
+      { accept: ['Nxe4'], cue: 'Recapture with your Knight!', bot: null }
+    ]},
+    { name: 'Scandinavian Defense (1...d5)', color: 'w', steps: [
+      { accept: ['e4'], cue: 'Open with 1. e4!', bot: 'd5' },
+      { accept: ['exd5'], cue: 'Capture their pawn cleanly!', bot: 'Qxd5' },
+      { accept: ['Nc3'], cue: 'Develop AND kick their Queen with tempo!', bot: 'Qa5' },
+      { accept: ['d4', 'Nf3', 'Bc4'], cue: 'Grab center space or develop!', bot: null }
+    ]}
+  ];
+
+  const OPENING_BLACK_REP = [
+    { name: "Crushing Scholar's Mate (vs Qh5)", color: 'b', botFirst: 'e4', steps: [
+      { accept: ['e5'], cue: 'Meet 1. e4 symmetrically with 1... e5!', bot: 'Qh5' },
+      { accept: ['Nc6'], cue: 'Defend e5 calmly—do NOT play g6 yet!', bot: 'Bc4' },
+      { accept: ['g6'], cue: 'Now block Qxf7# AND kick their Queen!', bot: 'Qf3' },
+      { accept: ['Nf6'], cue: 'Block Qxf7# again & develop cleanly!', bot: null }
+    ]},
+    { name: 'Solid vs Italian Game', color: 'b', botFirst: 'e4', steps: [
+      { accept: ['e5'], cue: 'Claim the center with 1... e5!', bot: 'Nf3' },
+      { accept: ['Nc6'], cue: 'Guard e5 with your Knight!', bot: 'Bc4' },
+      { accept: ['Bc5', 'Nf6'], cue: 'Develop Bishop to c5 or Knight to f6!', bot: 'd3' },
+      { accept: ['Nf6', 'Bc5', 'd6'], cue: 'Finish development cleanly!', bot: null }
+    ]},
+    { name: "Queen's Gambit Declined (vs 1. d4)", color: 'b', botFirst: 'd4', steps: [
+      { accept: ['d5'], cue: 'Meet 1. d4 directly with 1... d5!', bot: 'c4' },
+      { accept: ['e6', 'c6'], cue: 'Solidly reinforce d5 (e6 or c6)!', bot: 'Nc3' },
+      { accept: ['Nf6'], cue: 'Develop your Knight and guard d5!', bot: 'Bg5' },
+      { accept: ['Be7'], cue: 'Break the pin & prepare to castle!', bot: null }
+    ]},
+    { name: 'Anti-London Setup (vs Bf4)', color: 'b', botFirst: 'd4', steps: [
+      { accept: ['d5'], cue: 'Claim the center with 1... d5!', bot: 'Bf4' },
+      { accept: ['Nf6', 'c5'], cue: 'Develop Nf6 or strike the center with c5!', bot: 'e3' },
+      { accept: ['c5', 'e6', 'Bf5'], cue: 'Challenge d4 or free your Bishop!', bot: 'Nf3' },
+      { accept: ['Nc6', 'e6', 'c5'], cue: 'Bring out your pieces toward the center!', bot: null }
+    ]}
+  ];
+
+  // Realistic Middlegame / Endgame Conversions & Escape Artist Stages!
+  const FINISH_LV3_STAGES = [
+    { name: 'Converting Up a Full Rook', fen: '4k3/pp3ppp/8/8/8/5P2/PP3PPP/R2Q2K1 w - - 0 1', tip: 'Trade off pieces or coordinate Queen + Rook to checkmate their uncastled King!', botElo: 1200 },
+    { name: 'King + Queen Technique', fen: '4k3/8/8/8/8/8/8/3QK3 w - - 0 1', tip: 'Push the King to the edge, bring YOUR King close, and watch out for Stalemate!', botElo: 1400 }
+  ];
+
+  const FINISH_LV9_STAGES = [
+    { name: 'King + Rook Checkmate', fen: '4k3/8/8/8/8/8/8/4K2R w K - 0 1', tip: 'Cut off the King with your Rook, use opposition with your King, then check on the edge!', botElo: 1500 },
+    { name: 'King + Pawn Opposition', fen: '8/4k3/8/4K3/4P3/8/8/8 w - - 0 1', tip: 'Keep your King IN FRONT of the pawn to force promotion and checkmate!', botElo: 1600 }
+  ];
+
+  const FINISH_LV14_STAGES = [
+    { name: 'Convert +5 Middlegame Attack', fen: 'r4rk1/pp3ppp/2p5/4P3/3P4/2PB4/PP3PPP/R2Q1RK1 w - - 0 16', tip: 'You are up a full Bishop in a real middlegame—attack h7 or trade down cleanly!', botElo: 1600 },
+    { name: 'Convert Passed Pawn Endgame', fen: '6k1/5ppp/8/3P4/8/8/5PPP/3R2K1 w - - 0 30', tip: 'Push your passed d-pawn with Rook + King support and convert to Checkmate!', botElo: 1700 }
+  ];
+
+  const ESCAPE_ARTIST_LV13 = [
+    { name: 'Survive the Queen + Knight Storm', fen: 'r1bq1rk1/ppp2ppp/2n5/3p2N1/3P2n1/2PB4/PP1N1PPP/R1BQ1RK1 b - - 0 10', color: 'b', surviveMoves: 5, tip: 'White is eyeing h7—defend calmly, trade attackers, and survive 5 moves without losing material!', botElo: 1600 },
+    { name: 'Defend the Open Center', fen: 'r2q1rk1/ppp1bppp/2n5/3p4/3P2b1/2N2N2/PPP1BPPP/R1BQ1RK1 w - - 0 9', color: 'w', surviveMoves: 5, tip: 'Stay rock solid, protect your King & pieces, and survive 5 moves without dropping material!', botElo: 1650 }
+  ];
+
+  const ROADMAP_V44 = [
+    {
+      tier: 1, title: 'Tier 1: Street Arena', elo: '0 → 600 ELO',
+      levels: [
+        { num: 1, icon: '💀', name: 'Tactical Sniper I', sub: '6 real 2-move Queen Sac & Pin mates (W & B)' },
+        { num: 2, icon: '⚡', name: 'Blunder Dodger I', sub: '8 full-board traps (White & Black)' },
+        { num: 3, icon: '🔪', name: 'Finish Him! I', sub: 'Convert Q+R & King+Queen checkmates' },
+        { num: 4, icon: '🔍', name: 'Crime Scene', sub: 'Watch real clips, catch & punish blunders' },
+        { num: 5, icon: '👑', name: 'BOSS: 600 ELO', sub: '🧊 3s Freeze-Frame • 0 Undos', isBoss: true }
+      ]
+    },
+    {
+      tier: 2, title: 'Tier 2: Club Circuit', elo: '600 → 1000 ELO',
+      levels: [
+        { num: 6, icon: '🌲', name: '1.e4 Opening Survival', sub: 'Survive 5 defenses • 0 arrows • 3 Hearts' },
+        { num: 7, icon: '💎', name: 'Tactical Sniper II', sub: '6 legendary 3-move combos (Smothered, Anastasia, Légal)' },
+        { num: 8, icon: '⚡', name: 'Blunder Dodger II', sub: '10 sneaky pin & mate traps • 9s clock' },
+        { num: 9, icon: '🔪', name: 'Finish Him! II', sub: 'King+Rook mate & Pawn opposition' },
+        { num: 10, icon: '👑', name: 'BOSS: 1000 ELO', sub: '🧊 5s Freeze-Frame • 0 Undos', isBoss: true }
+      ]
+    },
+    {
+      tier: 3, title: 'Tier 3: Tactician Tower', elo: '1000 → 1400 ELO',
+      levels: [
+        { num: 11, icon: '🌲', name: 'Black Repertoire Survival', sub: 'Crush Scholar’s, Italian, QGD & London (0 arrows)' },
+        { num: 12, icon: '⚡', name: 'Blunder Dodger: Speed', sub: '12 traps • 7.5s shot clock • Both colors' },
+        { num: 13, icon: '🛡️', name: 'Escape Artist', sub: 'Survive sharp attacks vs 1600+ Bot' },
+        { num: 14, icon: '🔪', name: 'Finish Him! III', sub: 'Convert real middlegames & passed pawns' },
+        { num: 15, icon: '👑', name: 'BOSS: 1400 ELO', sub: '🧊 6s Freeze-Frame • 0 Undos', isBoss: true }
+      ]
+    },
+    {
+      tier: 4, title: 'Tier 4: Master & GM Summit (Next)', elo: '1400 → 2500+ ELO',
+      levels: [
+        { num: 16, icon: '⚖️', name: "Who's Winning?", sub: 'Read weak pawns, outposts & open files', soon: true },
+        { num: 17, icon: '🔪', name: 'Lucena & Philidor Lab', sub: 'Master Rook endgames vs 2200 Bot', soon: true },
+        { num: 18, icon: '👑', name: 'BOSS: 1800 → 2850', sub: 'Final Grandmaster Gauntlet', soon: true, isBoss: true }
+      ]
+    }
+  ];
+
+  // -------------------------------------------------------------------------
+  // 6. BULLETPROOF SESSION ENGINE (ZERO INPUT LEAK, ZERO FEN RESET!)
+  // -------------------------------------------------------------------------
+  let v44Session = null;
+  let v44DragOrigin = null;
+
+  function stopSessTimersV44(s) {
+    if (!s) return;
+    if (v44CdTimer) { clearTimeout(v44CdTimer); v44CdTimer = null; }
+    (s.timers || []).forEach(t => t.isInt ? clearInterval(t.id) : clearTimeout(t.id));
+    s.timers = [];
+  }
+
+  function addSessT(s, id, isInt = false) {
+    if (!s) return id;
+    if (!s.timers) s.timers = [];
+    s.timers.push({ id, isInt });
+    return id;
+  }
+
+  function syncBoardV44() {
+    if (!v44Session || !v44Session.chess) return;
+    window.demoOverrideFen = v44Session.chess.fen();
+    window.activeHintMove = null;
+    window.lessonClueSq = null;
+    window.lessonRefutationArrow = null;
+    boardFlipped = Boolean(v44Session.flipped);
+    window.renderBoard();
+    renderClimbSvgV44();
+  }
+
+  function stopClimbV44(backToMap = true) {
+    if (v44Session) {
+      stopSessTimersV44(v44Session);
+      v44Session = null;
+    }
+    v44DragOrigin = null;
+    document.body.classList.remove('v44-climb-live', 'v43-climb-live');
+    setTopBarV44(null);
+    document.getElementById('v44BottomBanner')?.classList.add('hidden');
+    document.getElementById('v44Countdown')?.classList.add('hidden');
+    renderClimbSvgV44();
+
+    // Cleanly restore main game / puzzles board state!
+    window.demoOverrideFen = null;
+    if (!isLessonMode && !isEditorMode && !window._isTwoPlayerLocalMode && !window._isOnlineMatch) {
+      boardFlipped = (playerColor === 'b');
+    }
+    if (typeof window.renderBoard === 'function') window.renderBoard();
+    if (backToMap) renderClimbMapV44();
+  }
+
+  // HARD-LOCK `demoOverrideFen` inside renderBoard whenever a Climb session is active
+  // so NO base-app callback can EVER snap the board back to STD_FEN!
+  const prevRenderV44 = window.renderBoard;
+  window.renderBoard = function() {
+    if (v44Session && v44Session.chess) {
+      window.demoOverrideFen = v44Session.chess.fen();
+      boardFlipped = Boolean(v44Session.flipped);
+    }
+    prevRenderV44();
+    if (v44Session) renderClimbSvgV44();
+  };
+
+  // COMPLETE LEFT-CLICK / DRAG ISOLATION ON boardEl DURING CLIMB!
+  // Leaves Right-Click (e.button === 2) 100% UNTOUCHED so native orange arrows work smoothly!
+  if (boardEl) {
+    ['mousedown', 'click', 'dblclick', 'dragstart'].forEach(evName => {
+      boardEl.addEventListener(evName, (e) => {
+        if (!v44Session) return;
+        if (e.button === 2) return; // Allow native right-click arrows!
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }, true);
+    });
+
+    boardEl.addEventListener('pointerdown', (e) => {
+      if (!v44Session || e.button !== 0) return; // Never touch right-click!
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      const s = v44Session;
+      const sq = xyToSqV44(e.clientX, e.clientY);
+      if (!sq) return;
+
+      if (s.kind === 'dodger' && s.awaitingChoice) {
+        if (sq === s.optA.to || sq === s.optA.from) { handleDodgerPickV44('A'); return; }
+        if (sq === s.optB.to || sq === s.optB.from) { handleDodgerPickV44('B'); return; }
+        return;
+      }
+
+      if (!s.allowInput || s.frozen || s.busy || !s.chess) return;
+      const myCol = s.playerColor || 'w';
+
+      if (s.selectedSq && s.selectedSq !== sq) {
+        const hit = s.chess.moves({ square: s.selectedSq, verbose: true }).find(m => m.to === sq);
+        if (hit) {
+          const fromSq = s.selectedSq;
+          s.selectedSq = null;
+          v44DragOrigin = null;
+          if (s.onMove) s.onMove(fromSq, sq);
+          return;
+        }
+      }
+
+      const pc = s.chess.get(sq);
+      if (pc && pc.color === myCol && s.chess.turn() === myCol) {
+        s.selectedSq = sq;
+        v44DragOrigin = sq;
+        renderClimbSvgV44();
+      } else {
+        s.selectedSq = null;
+        v44DragOrigin = null;
+        renderClimbSvgV44();
+      }
+    }, true);
+
+    window.addEventListener('pointerup', (e) => {
+      if (!v44Session || e.button !== 0 || !v44DragOrigin) return;
+      const fromSq = v44DragOrigin;
+      v44DragOrigin = null;
+      const s = v44Session;
+      if (!s.allowInput || s.frozen || s.busy || !s.chess) return;
+      const toSq = xyToSqV44(e.clientX, e.clientY);
+      if (!toSq || toSq === fromSq) return;
+      const hit = s.chess.moves({ square: fromSq, verbose: true }).find(m => m.to === toSq);
+      if (hit) {
+        s.selectedSq = null;
+        if (s.onMove) s.onMove(fromSq, toSq);
+      }
+    }, true);
+  }
+
+  // -------------------------------------------------------------------------
+  // 7. SIDEBAR SHELL & END SCREEN
+  // -------------------------------------------------------------------------
+  function renderClimbCardV44(title, bodyHtml) {
+    const c = document.getElementById('tabContentClimb');
+    if (!c) return;
+    c.innerHTML = `
+      <div class="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-white/10 flex-shrink-0">
+        <button id="v44BackMapBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-[#2b2926] hover:bg-[#3a3834] text-xs font-bold text-white border border-white/10 transition">← Map</button>
+        <div class="text-xs font-extrabold text-white truncate flex-1 text-center">${title}</div>
+        <button id="v44RestartBtn" type="button" class="px-2.5 py-1.5 rounded-lg bg-[#2b2926] hover:bg-[#3a3834] text-xs font-bold text-[#9ad165] border border-white/10 transition">↻</button>
+      </div>
+      <div class="flex-1 overflow-y-auto space-y-3">${bodyHtml}</div>
+    `;
+    c.querySelector('#v44BackMapBtn')?.addEventListener('click', () => stopClimbV44(true));
+    c.querySelector('#v44RestartBtn')?.addEventListener('click', () => {
+      const fn = v44Session && v44Session.restartFn;
+      if (fn) fn();
+    });
+  }
+
+  function showResultV44(won, title, summary, lvlNum, restartFn) {
+    if (v44Session) {
+      stopSessTimersV44(v44Session);
+      v44Session.allowInput = false;
+      v44Session.awaitingChoice = false;
+    }
+    setTopBarV44(null);
+    document.getElementById('v44BottomBanner')?.classList.add('hidden');
+    try { playChessSound(won ? 'levelup' : 'gameover'); } catch (e) {}
+    if (won && lvlNum) markCleared(lvlNum, lvlNum % 5 === 0 ? 40 : 18);
+
+    const hasNext = Boolean(won && lvlNum && lvlNum < 15);
+    renderClimbCardV44(
+      won ? '🏆 STAGE CLEARED!' : '💥 TRY AGAIN',
+      `
+        <div class="rounded-2xl p-5 bg-[#242320] border-2 ${won ? 'border-[#81b64c]' : 'border-[#ef4444]'} text-center space-y-3">
+          <div class="text-4xl">${won ? '🏆' : '💥'}</div>
+          <h3 class="text-base font-extrabold text-white">${title}</h3>
+          <p class="text-xs text-[#d6d4d0] leading-relaxed">${summary}</p>
+          <div class="pt-2 space-y-2">
+            ${hasNext ? `<button id="v44NextGoBtn" type="button" class="w-full py-2.5 rounded-xl bg-[#81b64c] hover:bg-[#93c75e] text-white font-extrabold text-xs shadow transition">▶ Next Level (Lv. ${lvlNum + 1})</button>` : ''}
+            <button id="v44AgainBtn" type="button" class="w-full py-2.5 rounded-xl bg-[#32b8e6] hover:bg-[#49c6f0] text-[#141311] font-extrabold text-xs shadow transition">↻ Play Again</button>
+            <button id="v44ToMapBtn" type="button" class="w-full py-2 rounded-xl bg-[#2b2926] hover:bg-[#3a3834] text-[#d6d4d0] font-bold text-xs border border-white/10 transition">Back to Roadmap</button>
+          </div>
+        </div>
+      `
+    );
+    document.getElementById('v44AgainBtn')?.addEventListener('click', () => { if (restartFn) restartFn(); });
+    document.getElementById('v44ToMapBtn')?.addEventListener('click', () => stopClimbV44(true));
+    document.getElementById('v44NextGoBtn')?.addEventListener('click', () => startClimbLevelV44(lvlNum + 1));
+  }
+
+  // -------------------------------------------------------------------------
+  // 8. MODE A: 💀 MULTI-MOVE TACTICAL SNIPER (LV. 1 & LV. 7 — 2 & 3 MOVE SACS!)
+  // -------------------------------------------------------------------------
+  function startMultiMoveSniperV44(deckRaw, lvlNum, title) {
+    stopClimbV44(false);
+    document.body.classList.add('v44-climb-live');
+
+    // Runtime-verify every combo line with chess.js before playing!
+    const deck = deckRaw.filter(item => {
+      try {
+        const sim = new Chess(item.fen);
+        for (let i = 0; i < item.line.length; i++) {
+          const u = item.line[i];
+          if (!sim.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] || 'q' })) return false;
+        }
+        return true;
+      } catch (e) { return false; }
+    });
+
+    const s = {
+      kind: 'combo',
+      lvlNum, title, deck,
+      idx: 0,
+      stepPtr: 0,
+      hearts: 3,
+      chess: new Chess(deck[0].fen),
+      playerColor: deck[0].fen.split(' ')[1] || 'w',
+      flipped: (deck[0].fen.split(' ')[1] === 'b'),
+      allowInput: false,
+      busy: false,
+      selectedSq: null,
+      arrows: [],
+      lastMove: null,
+      timers: [],
+      restartFn: () => startMultiMoveSniperV44(deckRaw, lvlNum, title)
+    };
+    v44Session = s;
+    syncBoardV44();
+
+    renderClimbCardV44(title, `<div class="text-center py-8 text-xs text-[#9e9c99]">Get ready for multi-move sacrifices...</div>`);
+    runCountdownV44(title.toUpperCase(), 'Find the full multi-move combination—sacrifices included!', () => loadComboItemV44());
+  }
+
+  function loadComboItemV44() {
+    const s = v44Session;
+    if (!s || s.kind !== 'combo') return;
+    stopSessTimersV44(s);
+
+    if (s.idx >= s.deck.length) {
+      showResultV44(true, `${s.title} Mastered!`, `You calculated and finished all <b>${s.deck.length}</b> multi-move combinations!`, s.lvlNum, s.restartFn);
+      return;
+    }
+
+    const item = s.deck[s.idx];
+    const side = item.fen.split(' ')[1] || 'w';
+    const totalPlayerMoves = Math.ceil(item.line.length / 2);
+
+    s.chess = new Chess(item.fen);
+    s.playerColor = side;
+    s.flipped = (side === 'b');
+    s.stepPtr = 0;
+    s.selectedSq = null;
+    s.arrows = [];
+    s.lastMove = null;
+    s.allowInput = true;
+    s.busy = false;
+    syncBoardV44();
+
+    const heartsStr = '❤️'.repeat(s.hearts) + '🖤'.repeat(Math.max(0, 3 - s.hearts));
+    const secLimit = totalPlayerMoves >= 3 ? 28 : 18;
+    const totalMs = secLimit * 1000;
+    const t0 = Date.now();
+
+    const refreshCard = (showHint = false) => {
+      const donePlies = Math.floor(s.stepPtr / 2);
+      renderClimbCardV44(
+        s.title,
+        `
+          <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span class="text-[#9ad165]">Combo ${s.idx + 1}/${s.deck.length} • ${side === 'w' ? '⬜ White' : '⬛ Black'}</span>
+              <span>${heartsStr}</span>
+            </div>
+            <div class="text-sm font-extrabold text-white">${item.title}</div>
+            <div class="text-xs text-[#c7c5c0]">Move <b>${donePlies + 1} of ${totalPlayerMoves}</b> — find the forcing move! Right-click drag to calculate arrows.</div>
+            <div id="v44ComboHint" class="${showHint ? '' : 'hidden'} p-2.5 rounded-lg bg-[#161512] border-l-2 border-[#f7c045] text-xs text-[#e8e6e2]">💡 ${item.hint}</div>
+          </div>
+        `
+      );
+    };
+    refreshCard(false);
+
+    const tid = setInterval(() => {
+      if (!v44Session || v44Session !== s || s.busy) return;
+      const rem = Math.max(0, totalMs - (Date.now() - t0));
+      const pct = (rem / totalMs) * 100;
+      const isLow = rem <= 4000;
+      setTopBarV44({
+        mode: isLow ? 'danger' : 'normal',
+        left: `💎 ${item.title} (${side === 'w' ? 'White' : 'Black'} to Move)`,
+        right: `<span>${heartsStr}</span><span style="color:${isLow ? '#fca5a5' : '#81b64c'};">${(rem / 1000).toFixed(1)}s</span>`,
+        pct,
+        barColor: isLow ? '#ef4444' : (pct < 45 ? '#f7c045' : '#81b64c')
+      });
+      if (rem <= 0) {
+        clearInterval(tid);
+        s.hearts--;
+        try { playChessSound('wrong'); } catch (e) {}
+        if (s.hearts <= 0) {
+          showResultV44(false, 'Time Ran Out!', `You cleared ${s.idx}/${s.deck.length} combos. Run it back!`, null, s.restartFn);
+        } else {
+          flashBottomBannerV44('⏰ Time Up! Try again (-1 ❤️)', '#ef4444', 1500);
+          refreshCard(true);
+          addSessT(s, setTimeout(loadComboItemV44, 1400));
+        }
+      }
+    }, 70);
+    addSessT(s, tid, true);
+
+    s.onMove = (fromSq, toSq) => {
+      const expectedUci = item.line[s.stepPtr];
+      const played2 = fromSq + toSq;
+      const sim = new Chess(s.chess.fen());
+      const mv = sim.move({ from: fromSq, to: toSq, promotion: 'q' });
+      if (!mv) return;
+
+      // Accept either the exact line move OR an immediate checkmate on the final step!
+      const isFinalStep = (s.stepPtr === item.line.length - 1);
+      const isRight = (played2 === expectedUci.slice(0, 4)) || (isFinalStep && sim.in_checkmate());
+
+      if (!isRight) {
+        try { playChessSound('wrong'); } catch (e) {}
+        flashBottomBannerV44('❌ Not the forcing line! Think Checks & Sacrifices.', '#ef4444', 1300);
+        document.getElementById('v44ComboHint')?.classList.remove('hidden');
+        return;
+      }
+
+      s.busy = true;
+      s.chess.move({ from: fromSq, to: toSq, promotion: expectedUci[4] || 'q' });
+      s.lastMove = { from: fromSq, to: toSq };
+      s.arrows = [{ from: fromSq, to: toSq, color: isFinalStep ? 'green' : 'cyan' }];
+      syncBoardV44();
+
+      if (isFinalStep || s.chess.in_checkmate()) {
+        stopSessTimersV44(s);
+        try { playChessSound('brilliant'); } catch (e) {}
+        flashBottomBannerV44(`👑 COMBINATION COMPLETE! (${mv.san})`, '#81b64c', 1200);
+        addSessT(s, setTimeout(() => { s.idx++; loadComboItemV44(); }, 1150));
+        return;
+      }
+
+      try { playChessSound(s.chess.in_check() ? 'check' : (mv.captured ? 'capture' : 'move')); } catch (e) {}
+      flashBottomBannerV44(`💎 BRILLIANT! (${mv.san}) — Finish the sequence!`, '#24d1c6', 1000);
+
+      // Play opponent's forced reply
+      s.stepPtr++;
+      const oppUci = item.line[s.stepPtr];
+      addSessT(s, setTimeout(() => {
+        if (!v44Session || v44Session !== s) return;
+        const om = s.chess.move({ from: oppUci.slice(0, 2), to: oppUci.slice(2, 4), promotion: oppUci[4] || 'q' });
+        if (om) s.lastMove = { from: om.from, to: om.to };
+        s.arrows = [];
+        s.stepPtr++;
+        s.busy = false;
+        syncBoardV44();
+        refreshCard(false);
+        try { playChessSound(om && om.captured ? 'capture' : 'move'); } catch (e) {}
+      }, 560));
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 9. MODE B: ⚡ BLUNDER DODGER (20 FULL-BOARD TRAPS — WHITE & BLACK!)
+  // -------------------------------------------------------------------------
+  function startDodgerV44(opts) {
+    stopClimbV44(false);
+    document.body.classList.add('v44-climb-live');
+
+    const raw = opts.allTiers ? DODGER_DECK_V44.slice() : DODGER_DECK_V44.filter(p => p.tier === opts.tier);
+    const valid = raw.filter(p => {
+      try {
+        const s1 = new Chess(p.fen);
+        if (!s1.move({ from: p.safe[0], to: p.safe[1], promotion: 'q' })) return false;
+        const s2 = new Chess(p.fen);
+        if (!s2.move({ from: p.blunder[0], to: p.blunder[1], promotion: 'q' })) return false;
+        if (!s2.move({ from: p.punish[0], to: p.punish[1], promotion: 'q' })) return false;
+        return true;
+      } catch (e) { return false; }
+    });
+
+    const queue = valid.slice().sort(() => Math.random() - 0.5);
+    const s = {
+      kind: 'dodger',
+      endless: Boolean(opts.endless),
+      lvlNum: opts.lvlNum || null,
+      title: opts.title || '⚡ Blunder Dodger',
+      baseSec: opts.timeSec || 10,
+      totalRounds: opts.endless ? 999 : Math.min(opts.totalRounds || 8, queue.length),
+      hearts: 3, score: 0, streak: 0, roundIdx: 0,
+      chess: new Chess(queue[0].fen),
+      flipped: (queue[0].fen.split(' ')[1] === 'b'),
+      allowInput: false, awaitingChoice: false, busy: false,
+      arrows: [], lastMove: null, timers: [],
+      optA: null, optB: null, safeSide: 'A', curItem: null,
+      queue, valid,
+      restartFn: () => startDodgerV44(opts)
+    };
+    v44Session = s;
+    syncBoardV44();
+
+    renderClimbCardV44(s.title, `<div class="text-center py-8 text-xs text-[#9e9c99]">Get ready! Watch the countdown...</div>`);
+    runCountdownV44(
+      s.endless ? '⚡ ENDLESS BLUNDER DODGER' : s.title.toUpperCase(),
+      'Two arrows: pick the SAFE move (Blue A or Purple B) before the clock hits zero!',
+      () => loadDodgerRoundV44()
+    );
+  }
+
+  function loadDodgerRoundV44() {
+    const s = v44Session;
+    if (!s || s.kind !== 'dodger') return;
+    stopSessTimersV44(s);
+
+    if (!s.endless && s.roundIdx >= s.totalRounds) {
+      showResultV44(true, 'Blunder Dodger Cleared!', `You dodged <b>${s.score}/${s.totalRounds}</b> traps with <b>${'❤️'.repeat(s.hearts)}</b> left!`, s.lvlNum, s.restartFn);
+      return;
+    }
+    if (s.roundIdx >= s.queue.length) {
+      s.queue.push(...s.valid.slice().sort(() => Math.random() - 0.5));
+    }
+
+    const item = s.queue[s.roundIdx];
+    const side = item.fen.split(' ')[1] || 'w';
+    s.curItem = item;
+    s.chess = new Chess(item.fen);
+    s.flipped = (side === 'b');
+
+    const mvSafe = new Chess(item.fen).move({ from: item.safe[0], to: item.safe[1], promotion: 'q' });
+    const mvBlun = new Chess(item.fen).move({ from: item.blunder[0], to: item.blunder[1], promotion: 'q' });
+
+    const safeIsA = Math.random() < 0.5;
+    s.safeSide = safeIsA ? 'A' : 'B';
+    s.optA = safeIsA ? { from: item.safe[0], to: item.safe[1], san: mvSafe.san } : { from: item.blunder[0], to: item.blunder[1], san: mvBlun.san };
+    s.optB = safeIsA ? { from: item.blunder[0], to: item.blunder[1], san: mvBlun.san } : { from: item.safe[0], to: item.safe[1], san: mvSafe.san };
+
+    s.arrows = [
+      { from: s.optA.from, to: s.optA.to, color: 'blue', label: 'A' },
+      { from: s.optB.from, to: s.optB.to, color: 'purple', label: 'B' }
+    ];
+    s.lastMove = null;
+    s.awaitingChoice = true;
+    syncBoardV44();
+
+    const secLimit = s.endless ? Math.max(6, s.baseSec - Math.floor(s.score / 5) * 1.1) : s.baseSec;
+    const totalMs = secLimit * 1000;
+    const t0 = Date.now();
+    const heartsStr = '❤️'.repeat(s.hearts) + '🖤'.repeat(Math.max(0, 3 - s.hearts));
+    const roundLbl = s.endless ? `Score: ${s.score} (Best: ${climbState.endlessBest})` : `Round ${s.roundIdx + 1}/${s.totalRounds}`;
+
+    renderClimbCardV44(
+      s.title,
+      `
+        <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+          <div class="flex items-center justify-between text-xs font-bold">
+            <span class="text-[#d6d4d0]">${roundLbl} • ${side === 'w' ? '⬜ White' : '⬛ Black'}</span>
+            <span>${heartsStr}</span>
+          </div>
+          <div class="text-xs text-[#b5b3b0]">One arrow is safe or winning; the other walks straight into a trap!</div>
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button id="v44PickA" type="button" class="v43-choice-btn v43-choice-a">A • ${s.optA.san}</button>
+            <button id="v44PickB" type="button" class="v43-choice-btn v43-choice-b">B • ${s.optB.san}</button>
+          </div>
+          <div id="v44DodgerFb" class="hidden p-2.5 rounded-lg bg-[#161512] border border-white/10 text-xs leading-relaxed"></div>
+        </div>
+      `
+    );
+
+    document.getElementById('v44PickA')?.addEventListener('click', () => handleDodgerPickV44('A'));
+    document.getElementById('v44PickB')?.addEventListener('click', () => handleDodgerPickV44('B'));
+
+    const tid = setInterval(() => {
+      if (!v44Session || v44Session !== s || !s.awaitingChoice) { clearInterval(tid); return; }
+      const rem = Math.max(0, totalMs - (Date.now() - t0));
+      const pct = (rem / totalMs) * 100;
+      const isLow = rem <= 3000;
+      setTopBarV44({
+        mode: isLow ? 'danger' : 'normal',
+        left: `⚡ PICK THE SAFE MOVE • ${roundLbl}`,
+        right: `<span>${heartsStr}</span><span style="color:${isLow ? '#fca5a5' : '#81b64c'};">${(rem / 1000).toFixed(1)}s</span>`,
+        pct,
+        barColor: isLow ? '#ef4444' : (pct < 55 ? '#f7c045' : '#81b64c')
+      });
+      if (rem <= 0) {
+        clearInterval(tid);
+        handleDodgerPickV44('TIMEOUT');
+      }
+    }, 60);
+    addSessT(s, tid, true);
+  }
+
+  function handleDodgerPickV44(choice) {
+    const s = v44Session;
+    if (!s || s.kind !== 'dodger' || !s.awaitingChoice) return;
+    s.awaitingChoice = false;
+    stopSessTimersV44(s);
+
+    const bA = document.getElementById('v44PickA'), bB = document.getElementById('v44PickB');
+    if (bA) bA.disabled = true;
+    if (bB) bB.disabled = true;
+
+    const fb = document.getElementById('v44DodgerFb');
+    const item = s.curItem;
+    const ok = (choice === s.safeSide);
+
+    if (ok) {
+      s.score++;
+      s.streak++;
+      if (s.endless && s.score > climbState.endlessBest) {
+        climbState.endlessBest = s.score;
+        saveClimbV44();
+      }
+      const mv = s.chess.move({ from: item.safe[0], to: item.safe[1], promotion: 'q' });
+      s.arrows = [{ from: item.safe[0], to: item.safe[1], color: 'green' }];
+      s.lastMove = mv ? { from: mv.from, to: mv.to } : null;
+      syncBoardV44();
+      try { playChessSound('brilliant'); } catch (e) {}
+      flashBottomBannerV44(s.streak >= 3 ? `🔥 x${s.streak} STREAK! CLEAN DODGE!` : '✅ SAFE MOVE!', '#81b64c', 1250);
+      if (fb) {
+        fb.style.borderColor = '#81b64c';
+        fb.innerHTML = `<b class="text-[#81b64c]">✅ Clean Dodge!</b> ${item.why}`;
+        fb.classList.remove('hidden');
+      }
+      addSessT(s, setTimeout(() => { s.roundIdx++; loadDodgerRoundV44(); }, 1300));
+    } else {
+      s.hearts--;
+      s.streak = 0;
+      try { playChessSound('wrong'); } catch (e) {}
+      flashBottomBannerV44(choice === 'TIMEOUT' ? '⏰ TIME UP! -1 ❤️' : '☠️ WALKED INTO THE TRAP! WATCH...', '#ef4444', 1800);
+
+      const bm = s.chess.move({ from: item.blunder[0], to: item.blunder[1], promotion: 'q' });
+      s.arrows = [{ from: item.blunder[0], to: item.blunder[1], color: 'red' }];
+      s.lastMove = bm ? { from: bm.from, to: bm.to } : null;
+      syncBoardV44();
+
+      if (fb) {
+        fb.style.borderColor = '#ef4444';
+        fb.innerHTML = `<b class="text-[#f26b68]">☠️ ${choice === 'TIMEOUT' ? 'Out of Time!' : 'Blundered!'}</b> ${item.why}`;
+        fb.classList.remove('hidden');
+      }
+
+      addSessT(s, setTimeout(() => {
+        const pm = s.chess.move({ from: item.punish[0], to: item.punish[1], promotion: 'q' });
+        s.arrows = [{ from: item.punish[0], to: item.punish[1], color: 'red', label: '!' }];
+        s.lastMove = pm ? { from: pm.from, to: pm.to } : null;
+        syncBoardV44();
+        try { playChessSound(pm && pm.captured ? 'capture' : 'check'); } catch (e) {}
+
+        addSessT(s, setTimeout(() => {
+          if (s.hearts <= 0) {
+            showResultV44(
+              false,
+              s.endless ? `Endless Score: ${s.score}` : 'Out of Hearts!',
+              s.endless ? `You dodged <b>${s.score}</b> blunders! Best: <b>${climbState.endlessBest}</b>.` : `You cleared <b>${s.score}/${s.totalRounds}</b> traps.`,
+              null,
+              s.restartFn
+            );
+          } else {
+            s.roundIdx++;
+            loadDodgerRoundV44();
+          }
+        }, 1600));
+      }, 720));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 10. MODE C: 🔍 CRIME SCENE (FIXED! ZERO BOARD RESETS ON CLICK!)
+  // -------------------------------------------------------------------------
+  function startCrimeSceneV44(lvlNum) {
+    stopClimbV44(false);
+    document.body.classList.add('v44-climb-live');
+
+    const s = {
+      kind: 'crime', lvlNum, idx: 0, phase: 'watch',
+      chess: new Chess(CRIME_DECK_V44[0].startFen),
+      playerColor: 'w', flipped: false,
+      allowInput: false, busy: false, selectedSq: null,
+      arrows: [], lastMove: null, timers: [],
+      restartFn: () => startCrimeSceneV44(lvlNum)
+    };
+    v44Session = s;
+    loadCrimeCaseV44();
+  }
+
+  function loadCrimeCaseV44() {
+    const s = v44Session;
+    if (!s || s.kind !== 'crime') return;
+    stopSessTimersV44(s);
+
+    if (s.idx >= CRIME_DECK_V44.length) {
+      showResultV44(true, 'Crime Scene Cleared!', 'You caught and punished every blunder cleanly!', s.lvlNum, s.restartFn);
+      return;
+    }
+
+    const cs = CRIME_DECK_V44[s.idx];
+    s.phase = 'watch';
+    s.allowInput = false;
+    s.arrows = [];
+    s.lastMove = null;
+    s.chess = new Chess(cs.startFen);
+    s.flipped = false;
+    syncBoardV44();
+
+    setTopBarV44({
+      left: `🔍 CRIME SCENE • Case ${s.idx + 1}/${CRIME_DECK_V44.length}`,
+      right: `<span class="text-[#f7c045]">WATCHING CLIP</span>`,
+      sub: 'Watch the moves play out—spot the move that ruined the game!'
+    });
+
+    renderClimbCardV44(
+      `Lv. ${s.lvlNum} • Crime Scene`,
+      `
+        <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+          <div class="text-sm font-extrabold text-white">${cs.title}</div>
+          <div id="v44CrimePrompt" class="text-xs text-[#c7c5c0]">👀 Watching clip...</div>
+          <div id="v44CrimeBtns" class="hidden space-y-1.5 pt-1"></div>
+          <div id="v44CrimeFb" class="hidden p-2.5 rounded-lg bg-[#161512] text-xs"></div>
+        </div>
+      `
+    );
+
+    let ptr = 0;
+    const playStep = () => {
+      if (!v44Session || v44Session !== s) return;
+      if (ptr < cs.clip.length) {
+        const cm = cs.clip[ptr];
+        s.chess.move({ from: cm.from, to: cm.to, promotion: 'q' });
+        s.lastMove = { from: cm.from, to: cm.to };
+        s.arrows = [{ from: cm.from, to: cm.to, color: ptr % 2 === 0 ? 'blue' : 'purple' }];
+        syncBoardV44();
+        try { playChessSound('move'); } catch (e) {}
+        ptr++;
+        addSessT(s, setTimeout(playStep, 820));
+      } else {
+        s.phase = 'pick';
+        s.playerColor = s.chess.turn();
+        setTopBarV44({
+          left: `🔍 CASE ${s.idx + 1}/${CRIME_DECK_V44.length} • STEP 1`,
+          right: `<span class="text-[#32b8e6]">PICK THE BLUNDER</span>`,
+          sub: 'Click which move in the clip was the huge blunder!'
+        });
+        const pr = document.getElementById('v44CrimePrompt');
+        if (pr) pr.textContent = 'Step 1: Which move ruined the game?';
+        const bw = document.getElementById('v44CrimeBtns');
+        if (bw) {
+          bw.classList.remove('hidden');
+          bw.innerHTML = cs.clip.map((cm, ci) => `
+            <button type="button" data-ci="${ci}" class="w-full py-2 px-3 rounded-xl bg-[#2b2926] hover:bg-[#3a3834] border border-white/15 text-white font-bold text-xs text-left flex justify-between transition">
+              <span>${ci + 1}. ${cm.who} played <b>${cm.san}</b></span>
+              <span class="text-[#f7c045]">Blunder? →</span>
+            </button>
+          `).join('');
+          bw.querySelectorAll('button[data-ci]').forEach(b => {
+            b.addEventListener('click', () => {
+              if (parseInt(b.dataset.ci, 10) === cs.blunderIdx) {
+                try { playChessSound('levelup'); } catch (e) {}
+                s.phase = 'punish';
+                s.allowInput = true;
+                s.arrows = [];
+                syncBoardV44();
+                bw.classList.add('hidden');
+                if (pr) pr.innerHTML = `<b class="text-[#81b64c]">✅ Caught it!</b> Now play the <b>winning punishment move</b> on the board!`;
+                setTopBarV44({
+                  left: `🔍 CASE ${s.idx + 1}/${CRIME_DECK_V44.length} • STEP 2`,
+                  right: `<span class="text-[#81b64c]">PUNISH IT!</span>`,
+                  sub: 'Play the winning punishment move right on the board!'
+                });
+                flashBottomBannerV44('✅ Caught the blunder! Now punish it!', '#81b64c', 1300);
+              } else {
+                try { playChessSound('wrong'); } catch (e) {}
+                flashBottomBannerV44('❌ That move was fine—check the later move!', '#ef4444', 1200);
+              }
+            });
+          });
+        }
+      }
+    };
+    addSessT(s, setTimeout(playStep, 650));
+
+    s.onMove = (fromSq, toSq) => {
+      if (s.phase !== 'punish') return;
+      if (fromSq === cs.punish[0] && toSq === cs.punish[1]) {
+        s.allowInput = false;
+        const mv = s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+        s.lastMove = { from: fromSq, to: toSq };
+        s.arrows = [{ from: fromSq, to: toSq, color: 'green' }];
+        syncBoardV44();
+        try { playChessSound('brilliant'); } catch (e) {}
+        flashBottomBannerV44(`💥 PUNISHED! (${mv.san})`, '#81b64c', 1500);
+        const fb = document.getElementById('v44CrimeFb');
+        if (fb) { fb.innerHTML = `<b class="text-[#81b64c]">✅ Case Closed!</b> ${cs.explain}`; fb.classList.remove('hidden'); }
+        addSessT(s, setTimeout(() => { s.idx++; loadCrimeCaseV44(); }, 1800));
+      } else {
+        try { playChessSound('wrong'); } catch (e) {}
+        flashBottomBannerV44('❌ Missed it! Look for Check, Fork, Pin, or Free Queen!', '#ef4444', 1300);
+      }
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 11. MODE D: 🌲 OPENING SURVIVAL (LV. 6 WHITE 1.e4 & LV. 11 BLACK REP!)
+  // -------------------------------------------------------------------------
+  function startOpeningSurvivalV44(branchesRaw, lvlNum, title) {
+    stopClimbV44(false);
+    document.body.classList.add('v44-climb-live');
+    const branches = branchesRaw.slice().sort(() => Math.random() - 0.5);
+    const s = {
+      kind: 'opening', lvlNum, title, branches,
+      bIdx: 0, stepIdx: 0, hearts: 3,
+      chess: new Chess(STD_FEN),
+      playerColor: branches[0].color || 'w',
+      flipped: (branches[0].color === 'b'),
+      allowInput: false, busy: false, selectedSq: null,
+      arrows: [], lastMove: null, timers: [],
+      restartFn: () => startOpeningSurvivalV44(branchesRaw, lvlNum, title)
+    };
+    v44Session = s;
+    loadOpeningWaveV44();
+  }
+
+  function loadOpeningWaveV44() {
+    const s = v44Session;
+    if (!s || s.kind !== 'opening') return;
+    stopSessTimersV44(s);
+
+    if (s.bIdx >= s.branches.length) {
+      showResultV44(true, `${s.title} Cleared!`, `You survived all <b>${s.branches.length}</b> opening lines with ZERO arrows!`, s.lvlNum, s.restartFn);
+      return;
+    }
+
+    const br = s.branches[s.bIdx];
+    s.stepIdx = 0;
+    s.chess = new Chess(STD_FEN);
+    s.playerColor = br.color || 'w';
+    s.flipped = (s.playerColor === 'b');
+    s.selectedSq = null;
+    s.arrows = [];
+    s.lastMove = null;
+    s.allowInput = !br.botFirst;
+    s.busy = Boolean(br.botFirst);
+    syncBoardV44();
+
+    const refreshUi = () => {
+      const cur = br.steps[s.stepIdx];
+      const heartsStr = '❤️'.repeat(s.hearts) + '🖤'.repeat(Math.max(0, 3 - s.hearts));
+      setTopBarV44({
+        left: `🌲 WAVE ${s.bIdx + 1}/${s.branches.length} • ${br.name}`,
+        right: `<span>${heartsStr}</span><span class="text-[#81b64c]">Move ${s.stepIdx + 1}/${br.steps.length}</span>`,
+        sub: cur ? cur.cue : 'Wave Complete!',
+        pct: (s.stepIdx / br.steps.length) * 100,
+        barColor: '#81b64c'
+      });
+      renderClimbCardV44(
+        s.title,
+        `
+          <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span class="text-[#9ad165]">Wave ${s.bIdx + 1}/${s.branches.length} • ${s.playerColor === 'w' ? '⬜ White' : '⬛ Black'}</span>
+              <span>${heartsStr}</span>
+            </div>
+            <div class="text-sm font-extrabold text-white">${br.name}</div>
+            <div class="p-2.5 rounded-lg bg-[#161512] border-l-2 border-[#32b8e6] text-xs text-[#e2e0dc]">🎯 ${cur ? cur.cue : 'Done!'}</div>
+            <div class="text-[11px] text-[#9e9c99]">No arrows—play from memory!</div>
+          </div>
+        `
+      );
+    };
+    refreshUi();
+
+    if (br.botFirst) {
+      addSessT(s, setTimeout(() => {
+        if (!v44Session || v44Session !== s) return;
+        const fm = s.chess.move(br.botFirst);
+        if (fm) s.lastMove = { from: fm.from, to: fm.to };
+        s.busy = false;
+        s.allowInput = true;
+        syncBoardV44();
+        try { playChessSound('move'); } catch (e) {}
+      }, 480));
+    }
+
+    s.onMove = (fromSq, toSq) => {
+      const cur = br.steps[s.stepIdx];
+      if (!cur) return;
+      const sim = new Chess(s.chess.fen());
+      const mv = sim.move({ from: fromSq, to: toSq, promotion: 'q' });
+      if (!mv) return;
+
+      if (cur.accept.includes(mv.san)) {
+        s.busy = true;
+        s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+        s.lastMove = { from: fromSq, to: toSq };
+        s.arrows = [];
+        syncBoardV44();
+        try { playChessSound(mv.captured ? 'capture' : 'move'); } catch (e) {}
+
+        if (cur.bot) {
+          addSessT(s, setTimeout(() => {
+            const bm = s.chess.move(cur.bot);
+            if (bm) s.lastMove = { from: bm.from, to: bm.to };
+            s.stepIdx++;
+            s.busy = false;
+            syncBoardV44();
+            refreshUi();
+            try { playChessSound(bm && bm.captured ? 'capture' : 'move'); } catch (e) {}
+          }, 500));
+        } else {
+          flashBottomBannerV44(`✅ ${br.name} Cleared!`, '#81b64c', 1100);
+          try { playChessSound('levelup'); } catch (e) {}
+          addSessT(s, setTimeout(() => { s.bIdx++; loadOpeningWaveV44(); }, 1050));
+        }
+      } else {
+        s.hearts--;
+        try { playChessSound('wrong'); } catch (e) {}
+        const hm = new Chess(s.chess.fen()).move(cur.accept[0]);
+        if (hm) { s.arrows = [{ from: hm.from, to: hm.to, color: 'green' }]; renderClimbSvgV44(); }
+        if (s.hearts <= 0) {
+          showResultV44(false, 'Out of Hearts!', `You needed <b>${cur.accept[0]}</b> in <b>${br.name}</b>. Run it back!`, null, s.restartFn);
+        } else {
+          flashBottomBannerV44(`❌ Play ${cur.accept[0]}! (-1 ❤️)`, '#ef4444', 1400);
+          refreshUi();
+        }
+      }
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 12. MODE E: 🔪 FINISH HIM!, 🛡️ ESCAPE ARTIST & 👑 FREEZE-FRAME BOSSES!
+  // -------------------------------------------------------------------------
+  function materialScoreFor(chess, color) {
+    const V = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+    let sum = 0;
+    const b = chess.board();
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = b[r][c]; if (!p) continue;
+      sum += (p.color === color ? 1 : -1) * (V[p.type] || 0);
+    }
+    return sum;
+  }
+
+  function startMatchLevelV44(cfg) {
+    stopClimbV44(false);
+    document.body.classList.add('v44-climb-live');
+    const s = {
+      kind: 'match', cfg, stageIdx: 0,
+      chess: new Chess(cfg.stages[0].fen),
+      playerColor: cfg.stages[0].color || 'w',
+      flipped: (cfg.stages[0].color === 'b'),
+      allowInput: false, frozen: false, busy: false,
+      selectedSq: null, arrows: [], lastMove: null,
+      movesSurvived: 0, startMatDiff: 0, botReqId: 0, timers: [],
+      restartFn: () => startMatchLevelV44(cfg)
+    };
+    v44Session = s;
+    loadMatchStageV44();
+  }
+
+  function loadMatchStageV44() {
+    const s = v44Session;
+    if (!s || s.kind !== 'match') return;
+    stopSessTimersV44(s);
+    const cfg = s.cfg;
+
+    if (s.stageIdx >= cfg.stages.length) {
+      showResultV44(
+        true,
+        cfg.isBoss ? `👑 ${cfg.title} DEFEATED!` : `${cfg.title} Cleared!`,
+        cfg.isBoss
+          ? `You crushed the <b>${cfg.stages[0].botElo} ELO Boss</b> with <b>${cfg.freezeSec}s Freeze-Frame</b> discipline &amp; 0 Undos!`
+          : (cfg.isEscape ? 'Ice in your veins! You survived every tactical storm without dropping material!' : 'Clean conversion with zero hints or undos!'),
+        cfg.lvlNum,
+        s.restartFn
+      );
+      return;
+    }
+
+    const stg = cfg.stages[s.stageIdx];
+    s.chess = new Chess(stg.fen);
+    s.playerColor = stg.color || s.chess.turn() || 'w';
+    s.flipped = (s.playerColor === 'b');
+    s.selectedSq = null; s.arrows = []; s.lastMove = null;
+    s.movesSurvived = 0;
+    s.startMatDiff = materialScoreFor(s.chess, s.playerColor);
+    s.frozen = false; s.busy = false; s.allowInput = false;
+    syncBoardV44();
+
+    const drawSideCard = (statusTxt) => {
+      renderClimbCardV44(
+        `Lv. ${cfg.lvlNum} • ${cfg.title}`,
+        `
+          <div class="rounded-xl p-3 bg-[#242320] border border-white/10 space-y-2.5">
+            <div class="flex items-center justify-between text-xs font-bold">
+              <span class="text-[#f7c045]">${cfg.isBoss ? `👑 ${stg.botElo} ELO Boss` : `Stage ${s.stageIdx + 1}/${cfg.stages.length}`}</span>
+              <span class="text-[#9e9c99]">0 Undos</span>
+            </div>
+            <div class="text-sm font-extrabold text-white">${stg.name}</div>
+            <div class="p-2.5 rounded-lg bg-[#161512] border-l-2 border-[#81b64c] text-xs text-[#e2e0dc]">💡 ${stg.tip}</div>
+            ${cfg.freezeSec ? `<div class="p-2 rounded-lg bg-[#13222b] border border-[#38bdf8]/40 text-[11px] text-[#9ae5ff]">🧊 <b>${cfg.freezeSec}s Freeze-Frame ON:</b> Watch the blue bar ABOVE the board—right-click drag to calculate while locked!</div>` : ''}
+            <div class="text-xs font-bold text-[#81b64c]">${statusTxt}</div>
+          </div>
+        `
+      );
+    };
+
+    const startFreezeBar = (sec) => {
+      const turnTag = cfg.isEscape ? `🛡️ SURVIVE ${stg.surviveMoves - s.movesSurvived} MORE` : '⚡ YOUR TURN';
+      if (!sec || sec <= 0) {
+        s.frozen = false;
+        s.allowInput = true;
+        setTopBarV44({
+          left: cfg.isBoss ? `👑 BOSS (${stg.botElo} ELO)` : (cfg.isEscape ? `🛡️ ${stg.name}` : `🔪 ${stg.name}`),
+          right: `<span class="text-[#81b64c]">${turnTag}</span>`,
+          sub: 'Right-click drag arrows anytime to visualize lines!'
+        });
+        return;
+      }
+
+      s.frozen = true;
+      s.allowInput = false;
+      const totalMs = sec * 1000, t0 = Date.now();
+      const ft = setInterval(() => {
+        if (!v44Session || v44Session !== s) { clearInterval(ft); return; }
+        const rem = Math.max(0, totalMs - (Date.now() - t0));
+        setTopBarV44({
+          mode: 'freeze',
+          left: `🧊 FREEZE-FRAME • SCAN FOR DANGER`,
+          right: `<span class="text-[#38bdf8]">${(rem / 1000).toFixed(1)}s</span>`,
+          sub: 'Board locked — Right-click drag arrows to plan your reply!',
+          pct: (rem / totalMs) * 100,
+          barColor: '#38bdf8'
+        });
+        if (rem <= 0) {
+          clearInterval(ft);
+          s.frozen = false;
+          s.allowInput = true;
+          try { playChessSound('move'); } catch (e) {}
+          flashBottomBannerV44('⚡ BOARD UNLOCKED — YOUR MOVE!', '#81b64c', 850);
+          setTopBarV44({
+            left: `👑 BOSS (${stg.botElo} ELO)`,
+            right: `<span class="text-[#81b64c]">⚡ YOUR TURN</span>`,
+            sub: 'Make your move!'
+          });
+        }
+      }, 60);
+      addSessT(s, ft, true);
+    };
+
+    const checkEnd = () => {
+      if (cfg.isEscape && s.movesSurvived >= stg.surviveMoves && !s.chess.game_over()) {
+        const nowMat = materialScoreFor(s.chess, s.playerColor);
+        if (nowMat >= s.startMatDiff - 2) {
+          s.allowInput = false; s.busy = true;
+          try { playChessSound('levelup'); } catch (e) {}
+          flashBottomBannerV44('🛡️ SURVIVED THE STORM!', '#81b64c', 1300);
+          addSessT(s, setTimeout(() => { s.stageIdx++; loadMatchStageV44(); }, 1250));
+          return true;
+        }
+      }
+      if (!s.chess.game_over()) return false;
+      s.allowInput = false; s.busy = true;
+      if (s.chess.in_checkmate()) {
+        const winner = (s.chess.turn() === 'b') ? 'w' : 'b';
+        if (winner === s.playerColor) {
+          try { playChessSound('levelup'); } catch (e) {}
+          flashBottomBannerV44('👑 CHECKMATE! STAGE CLEARED!', '#81b64c', 1400);
+          addSessT(s, setTimeout(() => { s.stageIdx++; loadMatchStageV44(); }, 1300));
+        } else {
+          showResultV44(false, 'Checkmated!', 'Take your time scanning threats and run it back!', null, s.restartFn);
+        }
+      } else {
+        if (cfg.isEscape) {
+          flashBottomBannerV44('🛡️ HELD THE DRAW!', '#81b64c', 1300);
+          addSessT(s, setTimeout(() => { s.stageIdx++; loadMatchStageV44(); }, 1250));
+        } else {
+          showResultV44(false, 'Draw — Try Again!', s.chess.in_stalemate() ? 'Stalemate! Leave their King a legal square until Checkmate.' : 'You need a Checkmate win to clear this stage!', null, s.restartFn);
+        }
+      }
+      return true;
+    };
+
+    const requestBot = () => {
+      s.busy = true; s.allowInput = false;
+      setTopBarV44({
+        left: cfg.isBoss ? `👑 BOSS (${stg.botElo} ELO)` : stg.name,
+        right: `<span class="text-[#f7c045]">Thinking...</span>`
+      });
+      const rid = ++s.botReqId;
+      const playIt = (mvSpec) => {
+        if (!v44Session || v44Session !== s || rid !== s.botReqId) return;
+        let ex = mvSpec ? s.chess.move({ from: mvSpec.from, to: mvSpec.to, promotion: mvSpec.promotion || 'q' }) : null;
+        if (!ex) { const l = s.chess.moves({ verbose: true }); if (l.length) ex = s.chess.move(l[0]); }
+        if (ex) s.lastMove = { from: ex.from, to: ex.to };
+        s.busy = false;
+        syncBoardV44();
+        try { playChessSound(s.chess.in_check() ? 'check' : (ex && ex.captured ? 'capture' : 'move')); } catch (e) {}
+        if (checkEnd()) return;
+        if (cfg.isEscape) {
+          const matNow = materialScoreFor(s.chess, s.playerColor);
+          if (matNow <= s.startMatDiff - 4) {
+            showResultV44(false, 'Lost Too Much Material!', 'You dropped a major piece during the defense—try again!', null, s.restartFn);
+            return;
+          }
+        }
+        startFreezeBar(cfg.freezeSec || 0);
+      };
+
+      if (v44BotWorker) {
+        v44BotWorker.onmessage = (ev) => {
+          if (!ev.data || ev.data.reqId !== rid) return;
+          addSessT(s, setTimeout(() => playIt(ev.data.move), 260));
+        };
+        v44BotWorker.postMessage({ type: 'BOT', reqId: rid, fen: s.chess.fen(), elo: stg.botElo });
+      } else {
+        addSessT(s, setTimeout(() => playIt(null), 350));
+      }
+    };
+
+    s.onMove = (fromSq, toSq) => {
+      if (s.frozen || s.busy) return;
+      const mv = s.chess.move({ from: fromSq, to: toSq, promotion: 'q' });
+      if (!mv) return;
+      s.lastMove = { from: mv.from, to: mv.to };
+      s.movesSurvived++;
+      syncBoardV44();
+      try { playChessSound(s.chess.in_check() ? 'check' : (mv.captured ? 'capture' : 'move')); } catch (e) {}
+      if (checkEnd()) return;
+      requestBot();
+    };
+
+    drawSideCard('Your turn!');
+    startFreezeBar(0); // Start immediately without blocking an untimed board!
+  }
+
+  function startClimbLevelV44(n) {
+    if (n === 1) startMultiMoveSniperV44(MULTI_MOVE_COMBOS_T1, 1, 'Lv. 1 • Tactical Sniper I');
+    else if (n === 2) startDodgerV44({ endless: false, tier: 1, totalRounds: 8, timeSec: 10, lvlNum: 2, title: 'Lv. 2 • Blunder Dodger I' });
+    else if (n === 3) startMatchLevelV44({ lvlNum: 3, title: 'Finish Him! I', stages: FINISH_LV3_STAGES, freezeSec: 0 });
+    else if (n === 4) startCrimeSceneV44(4);
+    else if (n === 5) startMatchLevelV44({ lvlNum: 5, title: '600 Boss Fight', stages: [{ name: 'Street Arena Boss (600 ELO)', fen: STD_FEN, tip: 'Use the 3s Freeze-Frame bar above the board to scan for danger!', botElo: 600 }], freezeSec: 3, isBoss: true });
+    else if (n === 6) startOpeningSurvivalV44(OPENING_WHITE_E4, 6, 'Lv. 6 • 1.e4 Survival');
+    else if (n === 7) startMultiMoveSniperV44(MULTI_MOVE_COMBOS_T2, 7, 'Lv. 7 • Tactical Sniper II');
+    else if (n === 8) startDodgerV44({ endless: false, tier: 2, totalRounds: 10, timeSec: 9, lvlNum: 8, title: 'Lv. 8 • Blunder Dodger II' });
+    else if (n === 9) startMatchLevelV44({ lvlNum: 9, title: 'Finish Him! II', stages: FINISH_LV9_STAGES, freezeSec: 0 });
+    else if (n === 10) startMatchLevelV44({ lvlNum: 10, title: '1000 Club Boss', stages: [{ name: 'Club Circuit Boss (1000 ELO)', fen: STD_FEN, tip: 'Use the 5s Freeze-Frame & right-click arrows to calculate cleanly!', botElo: 1000 }], freezeSec: 5, isBoss: true });
+    else if (n === 11) startOpeningSurvivalV44(OPENING_BLACK_REP, 11, 'Lv. 11 • Black Survival');
+    else if (n === 12) startDodgerV44({ endless: false, allTiers: true, totalRounds: 12, timeSec: 7.5, lvlNum: 12, title: 'Lv. 12 • Speed Dodger' });
+    else if (n === 13) startMatchLevelV44({ lvlNum: 13, title: 'Escape Artist', stages: ESCAPE_ARTIST_LV13, freezeSec: 0, isEscape: true });
+    else if (n === 14) startMatchLevelV44({ lvlNum: 14, title: 'Finish Him! III', stages: FINISH_LV14_STAGES, freezeSec: 0 });
+    else if (n === 15) startMatchLevelV44({ lvlNum: 15, title: '1400 Tactician Boss', stages: [{ name: 'Tactician Tower Boss (1400 ELO)', fen: STD_FEN, tip: '6s Freeze-Frame active—spot every tactic before touching a piece!', botElo: 1400 }], freezeSec: 6, isBoss: true });
+  }
+
+  // -------------------------------------------------------------------------
+  // 13. RENDER CLEAN V44 CLIMB MAP & TAKE OVER #v43ClimbTabBtn / #tabContentClimb
+  // -------------------------------------------------------------------------
+  function renderClimbMapV44() {
+    const c = document.getElementById('tabContentClimb');
+    if (!c) return;
+    const done = climbState.completed.length;
+    const pct = Math.round((done / 15) * 100);
+
+    let html = `
+      <div class="v43-endless-hero space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="px-2 py-0.5 rounded-full bg-[#a855f7]/30 text-[#e9d5ff] text-[9.5px] font-extrabold uppercase tracking-wider">ARCADE MODE</span>
+          <span class="text-[11px] font-extrabold text-[#f7c045]">🏆 Best: ${climbState.endlessBest}</span>
+        </div>
+        <div class="text-sm font-extrabold text-white">⚡ Endless Blunder Dodger</div>
+        <div class="text-[11px] text-[#d6d4d0] leading-snug">20 real traps (White &amp; Black). 3 Hearts &amp; faster clock every 5 dodges!</div>
+        <button id="v44StartEndlessBtn" type="button" class="w-full py-2 rounded-xl bg-gradient-to-r from-[#a855f7] to-[#32b8e6] hover:brightness-110 text-white font-extrabold text-xs shadow transition">
+          ▶ Play Endless Blunder Dodger
+        </button>
+      </div>
+
+      <div class="rounded-xl p-2.5 bg-[#1a1916] border border-white/10 mb-1">
+        <div class="flex items-center justify-between text-[11px] font-bold mb-1.5">
+          <span class="text-white">⚔️ Pro Climb Roadmap</span>
+          <span class="text-[#81b64c]">${done}/15 Cleared (${pct}%)</span>
+        </div>
+        <div class="w-full h-1.5 rounded-full bg-black/40 overflow-hidden">
+          <div class="h-full bg-[#81b64c] rounded-full transition-all" style="width:${pct}%"></div>
+        </div>
+      </div>
+    `;
+
+    ROADMAP_V44.forEach(t => {
+      html += `<div class="v43-tier-header"><span>${t.title}</span><span class="text-[#9e9c99] text-[10px]">${t.elo}</span></div>`;
+      t.levels.forEach(lv => {
+        const clr = isCleared(lv.num);
+        const unl = !lv.soon && isUnlocked(lv.num);
+        const cls = ['v43-level-card', clr ? 'cleared' : '', lv.isBoss ? 'boss-card' : '', !unl ? 'locked' : ''].filter(Boolean).join(' ');
+        const badge = lv.soon
+          ? `<span class="text-[10px] font-bold text-[#7c7a76]">Soon</span>`
+          : (clr ? `<span class="text-xs font-extrabold text-[#81b64c]">✓</span>`
+            : (unl ? `<span class="px-2 py-0.5 rounded-md bg-[#81b64c] text-white text-[10px] font-extrabold">Play</span>` : `<span class="text-xs">🔒</span>`));
+        html += `
+          <div class="${cls}" ${unl ? `data-v44-lvl="${lv.num}"` : ''}>
+            <div class="v43-lvl-badge">${lv.icon}</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-extrabold text-white truncate">Lv. ${lv.num} • ${lv.name}</div>
+              <div class="text-[10.5px] text-[#a8a6a1] truncate">${lv.sub}</div>
+            </div>
+            <div class="flex-shrink-0">${badge}</div>
+          </div>
+        `;
+      });
+    });
+
+    html += `
+      <div class="pt-2 pb-4 flex items-center justify-between text-[10.5px] text-[#9e9c99]">
+        <span>Tiers 1–3 live (Lv. 1–15)</span>
+        <button id="v44FreePlayBtn" type="button" class="underline hover:text-white font-bold">
+          ${climbState.freePlayUnlock ? '🔒 Lock Order' : '🔓 Unlock All 1–15'}
+        </button>
+      </div>
+    `;
+
+    c.innerHTML = html;
+
+    c.querySelector('#v44StartEndlessBtn')?.addEventListener('click', () => {
+      startDodgerV44({ endless: true, allTiers: true, timeSec: 10, title: '⚡ Endless Blunder Dodger' });
+    });
+    c.querySelectorAll('[data-v44-lvl]').forEach(el => {
+      el.addEventListener('click', () => startClimbLevelV44(parseInt(el.dataset.v44Lvl, 10)));
+    });
+    c.querySelector('#v44FreePlayBtn')?.addEventListener('click', () => {
+      climbState.freePlayUnlock = !climbState.freePlayUnlock;
+      saveClimbV44();
+      renderClimbMapV44();
+    });
+  }
+
+  // Cleanly re-bind Climb tab switching so V43's map NEVER renders again!
+  const prevActV44 = window.activateSidebarTab;
+  window.activateSidebarTab = function(tabName) {
+    if (window._isOnlineMatch && !window._twoPlayerMatchEnded && tabName !== 'coach') {
+      if (prevActV44) prevActV44(tabName);
+      return;
+    }
+
+    const climbPanel = document.getElementById('tabContentClimb');
+    if (tabName === 'climb') {
+      document.getElementById('hoverHudCloseBtn')?.click();
+      document.getElementById('v9TransitionOverlay')?.classList.add('hidden');
+      document.querySelectorAll('.sidebar-tab').forEach(b => {
+        const on = b.dataset.tab === 'climb';
+        b.classList.toggle('bg-[#363431]', on);
+        b.classList.toggle('text-white', on);
+        b.classList.toggle('shadow-sm', on);
+        b.classList.toggle('text-[#9e9c99]', !on);
+      });
+      ['tabContentCoach', 'tabContentLessons', 'tabContentReview', 'tabContentEditor', 'tabContentHistory'].forEach(id => {
+        document.getElementById(id)?.classList.add('hidden');
+      });
+      if (climbPanel) climbPanel.classList.remove('hidden');
+      if (!v44Session) renderClimbMapV44();
+      return;
+    }
+
+    if (v44Session) stopClimbV44(false);
+    if (climbPanel) climbPanel.classList.add('hidden');
+    if (prevActV44) prevActV44(tabName);
+  };
+
+  window.addEventListener('resize', () => {
+    if (v44Session) renderClimbSvgV44();
+  });
+
+  renderClimbMapV44();
+})();
+</script>
 </html>
